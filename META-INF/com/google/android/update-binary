@@ -1,0 +1,142 @@
+#!/sbin/sh
+OUTFD=$2
+ZIPFILE=$3
+TMPDIR=/dev/tmp/sukisu_install
+
+ui_print() {
+  echo "ui_print $1" >&$OUTFD
+  echo "ui_print" >&$OUTFD
+}
+
+abort() {
+  ui_print "****************************************"
+  ui_print "! ERROR: $1"
+  ui_print "****************************************"
+  rm -rf "$TMPDIR"
+  exit 1
+}
+
+rm -rf "$TMPDIR"
+mkdir -p "$TMPDIR"
+cd "$TMPDIR" || abort "Unable to create temp directory"
+
+ui_print "****************************************"
+ui_print "   SukiSU-Ultra + SuSFS LKM Installer   "
+ui_print "****************************************"
+
+unzip -o "$ZIPFILE" -d "$TMPDIR" >&2
+chmod -R 755 "$TMPDIR"
+. "$TMPDIR/config.env"
+
+# 1. Detect KMI from running kernel
+KERNEL_VER=$(uname -r)
+KMI=$(echo "$KERNEL_VER" | sed -nE 's/^([0-9]+\.[0-9]+).*-(android[0-9]+).*/\2-\1/p')
+if [ -z "$KMI" ]; then
+  # Fallback parser for standard GKI strings
+  KVER=$(echo "$KERNEL_VER" | cut -d. -f1,2)
+  case "$KVER" in
+    5.10) KMI="android12-5.10" ;;
+    5.15) KMI="android13-5.15" ;;
+    6.1)  KMI="android14-6.1"  ;;
+    6.6)  KMI="android15-6.6"  ;;
+    6.12) KMI="android16-6.12" ;;
+    6.18) KMI="android17-6.18" ;;
+    *) abort "Unsupported kernel version: $KERNEL_VER" ;;
+  esac
+fi
+
+ui_print "- Detected Kernel: $KERNEL_VER"
+ui_print "- Target KMI: $KMI"
+
+LKM_FILE="$TMPDIR/${KMI}_kernelsu.ko"
+[ -f "$LKM_FILE" ] || abort "Missing LKM for $KMI (${KMI}_kernelsu.ko)"
+
+# 2. Detect Active Slot & Target Boot Partition (init_boot preferred for GKI 2.0+)
+SLOT=$(getprop ro.boot.slot_suffix)
+[ -z "$SLOT" ] && SLOT=$(grep -o 'androidboot.slot_suffix=_[ab]' /proc/cmdline | cut -d= -f2)
+
+TARGET_PART=""
+for PART in "init_boot${SLOT}" "init_boot" "boot${SLOT}" "boot"; do
+  BLK=$(find /dev/block -name "$PART" | head -n 1)
+  if [ -n "$BLK" ]; then
+    TARGET_PART="$BLK"
+    PART_NAME="$PART"
+    break
+  fi
+done
+
+[ -n "$TARGET_PART" ] || abort "Could not locate init_boot or boot block device!"
+ui_print "- Target Partition: $PART_NAME ($TARGET_PART)"
+
+# 3. Dump and Patch Boot/Init_Boot Image via ksud
+ui_print "- Dumping $PART_NAME..."
+dd if="$TARGET_PART" of="$TMPDIR/boot.img" bs=4096 2>/dev/null || abort "Failed to dump $PART_NAME"
+
+ui_print "- Patching ramdisk with SukiSU-Ultra LKM..."
+"$TMPDIR/ksud" boot-patch \
+  -b "$TMPDIR/boot.img" \
+  --module "$LKM_FILE" \
+  --magiskboot "$TMPDIR/magiskboot" \
+  --kmi "$KMI" >&2 || abort "ksud boot-patch failed!"
+
+PATCHED_IMG=$(ls "$TMPDIR"/kernelsu_patched_*.img 2>/dev/null | head -n 1)
+[ -f "$PATCHED_IMG" ] || abort "Patched image not found!"
+
+ui_print "- Flashing patched image to $PART_NAME..."
+dd if="$PATCHED_IMG" of="$TARGET_PART" bs=4096 2>/dev/null || abort "Failed to write patched image!"
+
+# 4. Stage ksud, SuSFS LKM, AVC Spoof & SELinux Hide in /data/adb
+ui_print "- Mounting /data to configure SuSFS & stealth flags..."
+mount /data 2>/dev/null
+if [ -d "/data/adb" ]; then
+  mkdir -p /data/adb/ksu/bin /data/adb/post-fs-data.d /data/adb/service.d /data/adb/susfs4ksu
+  cp -f "$TMPDIR/ksud" /data/adb/ksud
+  chmod 755 /data/adb/ksud
+
+  # Install SuSFS LKM Module if present & enabled
+  if [ "$ENABLE_SUSFS_LKM" = "1" ] && [ -f "$TMPDIR/susfs_guard_lkm-${KMI}.ko" ]; then
+    ui_print "- Installing SuSFS LKM for $KMI..."
+    cp -f "$TMPDIR/susfs_guard_lkm-${KMI}.ko" /data/adb/susfs4ksu/susfs_guard_lkm.ko
+    chmod 644 /data/adb/susfs4ksu/susfs_guard_lkm.ko
+  fi
+
+  # Generate boot-time stealth config script
+  cat << 'SCRIPT' > /data/adb/post-fs-data.d/00_sukisu_stealth.sh
+#!/system/bin/sh
+MODDIR=/data/adb/susfs4ksu
+
+# 1. Load SuSFS LKM early with expose_proc=1 so SukiSU Manager can control it
+if [ -f "$MODDIR/susfs_guard_lkm.ko" ] && [ ! -e "/proc/susfs_version" ]; then
+  /data/adb/ksud insmod "$MODDIR/susfs_guard_lkm.ko" expose_proc=1
+fi
+SCRIPT
+
+  if [ "$ENABLE_AVC_SPOOF" = "1" ]; then
+    ui_print "- Enabling AVC Log Spoofing..."
+    cat << 'SCRIPT' >> /data/adb/post-fs-data.d/00_sukisu_stealth.sh
+# 2. Enable SukiSU-Ultra AVC Spoofing
+/data/adb/ksud feature set avc_spoof 1 2>/dev/null || echo 1 > /sys/module/kernelsu/parameters/enable_avc_spoof 2>/dev/null
+touch /data/adb/ksu/.avc_spoof_enabled
+SCRIPT
+  fi
+
+  if [ "$ENABLE_HIDE_SELINUX" = "1" ]; then
+    ui_print "- Enabling Hide SELinux Modifications..."
+    cat << 'SCRIPT' >> /data/adb/post-fs-data.d/00_sukisu_stealth.sh
+# 3. Enable SELinux Modification Hiding
+/data/adb/ksud feature set hide_selinux 1 2>/dev/null || echo 1 > /sys/module/kernelsu/parameters/hide_selinux 2>/dev/null
+touch /data/adb/ksu/.hide_selinux_enabled
+SCRIPT
+  fi
+
+  chmod 755 /data/adb/post-fs-data.d/00_sukisu_stealth.sh
+else
+  ui_print "! /data is encrypted/unmounted; boot patch succeeded, configure flags in SukiSU Manager after boot."
+fi
+
+ui_print "- Cleaning up..."
+rm -rf "$TMPDIR"
+ui_print "****************************************"
+ui_print "   Installation Complete! Reboot now.   "
+ui_print "****************************************"
+exit 0
