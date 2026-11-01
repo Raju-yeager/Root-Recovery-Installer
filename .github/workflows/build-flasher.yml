@@ -11,46 +11,46 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout Template
         uses: actions/checkout@v4
 
       - name: Fetch Latest SukiSU-Ultra LKM & ksud
         run: |
-          SUKI_JSON=$(curl -s https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
+          SUKI_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
           SUKI_TAG=$(echo "$SUKI_JSON" | jq -r .tag_name)
           echo "SUKI_TAG=$SUKI_TAG" >> $GITHUB_ENV
 
-          # Download ksud
           KSUD_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select(.name == "ksud-aarch64-linux-android") | .browser_download_url')
-          curl -L "$KSUD_URL" -o ksud
+          curl -fL "$KSUD_URL" -o ksud
           chmod +x ksud
 
-          # Download KMIs matching your screenshot
           for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
-            KO_URL=$(echo "$SUKI_JSON" | jq -r ".assets[] | select(.name == \"lkm-aarch64-${KMI}_kernelsu.ko\") | .browser_download_url")
+            KO_URL=$(echo "$SUKI_JSON" | jq -r ".assets[] | select(.name | endswith(\"${KMI}_kernelsu.ko\")) | .browser_download_url" | head -n 1)
             if [ "$KO_URL" != "null" ] && [ -n "$KO_URL" ]; then
-              curl -L "$KO_URL" -o "${KMI}_kernelsu.ko"
+              curl -fL "$KO_URL" -o "${KMI}_kernelsu.ko"
             fi
           done
 
-      - name: Fetch Latest SuSFS LKM (inforcqb/susfs4ksu-lkm)
+      - name: Fetch Latest SuSFS LKM (inforcqb/susfs4ksu-for-lkm)
         run: |
-          SUSFS_JSON=$(curl -s https://api.github.com/repos/inforcqb/susfs4ksu-lkm/releases/latest)
+          SUSFS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
           SUSFS_TAG=$(echo "$SUSFS_JSON" | jq -r .tag_name)
           echo "SUSFS_TAG=$SUSFS_TAG" >> $GITHUB_ENV
 
           for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
-            SUS_URL=$(echo "$SUSFS_JSON" | jq -r ".assets[] | select(.name | contains(\"${KMI}.ko\")) | .browser_download_url" | head -n 1)
+            SUS_URL=$(echo "$SUSFS_JSON" | jq -r ".assets[] | select(.name | contains(\"${KMI}\") and endswith(\".ko\")) | .browser_download_url" | head -n 1)
             if [ "$SUS_URL" != "null" ] && [ -n "$SUS_URL" ]; then
-              curl -L "$SUS_URL" -o "susfs_guard_lkm-${KMI}.ko"
+              curl -fL "$SUS_URL" -o "susfs_guard_lkm-${KMI}.ko"
             fi
           done
 
       - name: Fetch magiskboot (arm64)
         run: |
-          MAGISK_URL=$(curl -s https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
-          curl -L "$MAGISK_URL" -o magisk.apk
+          MAGISK_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
+          curl -fL "$MAGISK_URL" -o magisk.apk
           unzip -p magisk.apk lib/arm64-v8a/libmagiskboot.so > magiskboot
           chmod +x magiskboot
           rm -f magisk.apk
@@ -59,12 +59,12 @@ jobs:
         run: |
           cat << TXT > source.txt
           SukiSU-Ultra: ${{ env.SUKI_TAG }} (https://github.com/SukiSU-Ultra/SukiSU-Ultra)
-          SuSFS-LKM: ${{ env.SUSFS_TAG }} (https://github.com/inforcqb/susfs4ksu-lkm)
+          SuSFS-LKM: ${{ env.SUSFS_TAG }} (https://github.com/inforcqb/susfs4ksu-for-lkm)
           Defaults: AVC_SPOOF=ON | HIDE_SELINUX=ON | SUSFS_EXPOSE_PROC=ON
           Build Date: $(date -u +"%Y-%m-%d %H:%M UTC")
           TXT
 
-          ZIP_NAME="SukiSU_Ultra_${{ env.SUKI_TAG }}_SuSFS_Recovery.zip"
+          ZIP_NAME="SukiSU_Ultra_${{ env.SUKI_TAG }}_SuSFS_${{ env.SUSFS_TAG }}_Recovery.zip"
           zip -r9 "$ZIP_NAME" META-INF config.env source.txt ksud magiskboot *.ko
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
