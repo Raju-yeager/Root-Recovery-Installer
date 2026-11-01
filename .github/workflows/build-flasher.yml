@@ -1,10 +1,9 @@
-name: Auto-Sync & Build SukiSU-Ultra + SuSFS ZIP
+name: Auto-Sync, Build & Upload to Telegram
 
 on:
   push:
     branches: [ "main" ]
   schedule:
-    # Runs every 6 hours to check for new upstream SukiSU-Ultra or SuSFS LKM releases
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
@@ -16,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
     steps:
       - name: Check Upstream Versions & Compare with Current Releases
         id: check
@@ -36,7 +37,6 @@ jobs:
           echo "SUSFS_TAG=$SUSFS_TAG" >> $GITHUB_ENV
           echo "COMBINED_TAG=$COMBINED_TAG" >> $GITHUB_ENV
 
-          # Check if a release with this exact SukiSU + SuSFS version combo already exists
           STATUS=$(curl -sL -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/repos/${{ github.repository }}/releases/tags/${COMBINED_TAG}")
 
@@ -51,6 +51,14 @@ jobs:
       - name: Checkout Template
         if: steps.check.outputs.should_build == 'true'
         uses: actions/checkout@v4
+
+      - name: Verify update-binary has no legacy flags
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          if grep -q -- "--magiskboot" META-INF/com/google/android/update-binary; then
+            echo "ERROR: Old --magiskboot flag still present in update-binary!"
+            exit 1
+          fi
 
       - name: Fetch Latest SukiSU-Ultra LKM & ksud
         if: steps.check.outputs.should_build == 'true'
@@ -103,7 +111,7 @@ jobs:
           zip -r9 "$ZIP_NAME" META-INF config.env source.txt ksud magiskboot *.ko
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
-      - name: Publish or Update Release
+      - name: Publish or Update GitHub Release
         if: steps.check.outputs.should_build == 'true'
         uses: softprops/action-gh-release@v2
         with:
@@ -111,3 +119,25 @@ jobs:
           name: "SukiSU-Ultra ${{ env.SUKI_TAG }} + SuSFS (${{ env.SUSFS_TAG }}) Flasher"
           files: ${{ env.ZIP_NAME }}
           generate_release_notes: true
+
+      - name: Upload ZIP to Telegram Channel (@Evil_twin_peridot)
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          CAPTION="⚡ *SukiSU-Ultra + SuSFS LKM Recovery Flasher*%0A%0A🔹 *SukiSU-Ultra:* \`${{ env.SUKI_TAG }}\`%0A🔹 *SuSFS LKM:* \`${{ env.SUSFS_TAG }}\`%0A🔹 *KMIs:* \`A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18\`%0A🔹 *Pre-Enabled:* \`AVC Spoofing | Hide SELinux | SuSFS Early Load\`%0A%0A📦 *Flash directly in TWRP / OrangeFox / Aera Recovery*"
+
+          # Try public @username first, fallback to numeric -1004367113991 channel ID
+          RESP=$(curl -s -F chat_id="${TG_CHAT_ID}" \
+            -F document=@"${{ env.ZIP_NAME }}" \
+            -F parse_mode="Markdown" \
+            -F caption="$(printf '%b' "${CAPTION//%/\\x}")" \
+            "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument")
+
+          OK=$(echo "$RESP" | jq -r .ok)
+          if [ "$OK" != "true" ]; then
+            echo "Fallback to numeric ID -1004367113991..."
+            curl -f -F chat_id="-1004367113991" \
+              -F document=@"${{ env.ZIP_NAME }}" \
+              -F parse_mode="Markdown" \
+              -F caption="$(printf '%b' "${CAPTION//%/\\x}")" \
+              "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument"
+          fi

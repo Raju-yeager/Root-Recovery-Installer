@@ -26,13 +26,13 @@ ui_print "****************************************"
 
 unzip -o "$ZIPFILE" -d "$TMPDIR" >&2
 chmod -R 755 "$TMPDIR"
+export PATH="$TMPDIR:$PATH"
 . "$TMPDIR/config.env"
 
 # 1. Detect KMI from running kernel
 KERNEL_VER=$(uname -r)
 KMI=$(echo "$KERNEL_VER" | sed -nE 's/^([0-9]+\.[0-9]+).*-(android[0-9]+).*/\2-\1/p')
 if [ -z "$KMI" ]; then
-  # Fallback parser for standard GKI strings
   KVER=$(echo "$KERNEL_VER" | cut -d. -f1,2)
   case "$KVER" in
     5.10) KMI="android12-5.10" ;;
@@ -74,12 +74,10 @@ dd if="$TARGET_PART" of="$TMPDIR/boot.img" bs=4096 2>/dev/null || abort "Failed 
 
 ui_print "- Patching ramdisk with SukiSU-Ultra LKM..."
 "$TMPDIR/ksud" boot-patch \
-  -b "$TMPDIR/boot.img" \
-  --module "$LKM_FILE" \
-  --magiskboot "$TMPDIR/magiskboot" \
-  --kmi "$KMI" >&2 || abort "ksud boot-patch failed!"
+  --boot "$TMPDIR/boot.img" \
+  --module "$LKM_FILE" >&2 || abort "ksud boot-patch failed!"
 
-PATCHED_IMG=$(ls "$TMPDIR"/kernelsu_patched_*.img 2>/dev/null | head -n 1)
+PATCHED_IMG=$(ls "$TMPDIR"/kernelsu_patched_*.img "$TMPDIR"/sukisu_patched_*.img 2>/dev/null | head -n 1)
 [ -f "$PATCHED_IMG" ] || abort "Patched image not found!"
 
 ui_print "- Flashing patched image to $PART_NAME..."
@@ -93,14 +91,12 @@ if [ -d "/data/adb" ]; then
   cp -f "$TMPDIR/ksud" /data/adb/ksud
   chmod 755 /data/adb/ksud
 
-  # Install SuSFS LKM Module if present & enabled
   if [ "$ENABLE_SUSFS_LKM" = "1" ] && [ -f "$TMPDIR/susfs_guard_lkm-${KMI}.ko" ]; then
     ui_print "- Installing SuSFS LKM for $KMI..."
     cp -f "$TMPDIR/susfs_guard_lkm-${KMI}.ko" /data/adb/susfs4ksu/susfs_guard_lkm.ko
     chmod 644 /data/adb/susfs4ksu/susfs_guard_lkm.ko
   fi
 
-  # Generate boot-time stealth config script
   cat << 'SCRIPT' > /data/adb/post-fs-data.d/00_sukisu_stealth.sh
 #!/system/bin/sh
 MODDIR=/data/adb/susfs4ksu
