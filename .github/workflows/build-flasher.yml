@@ -64,7 +64,6 @@ jobs:
         if: steps.check.outputs.should_build == 'true'
         run: |
           SUKI_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
-
           KSUD_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select(.name == "ksud-aarch64-linux-android") | .browser_download_url')
           curl -fL "$KSUD_URL" -o ksud
           chmod +x ksud
@@ -80,7 +79,6 @@ jobs:
         if: steps.check.outputs.should_build == 'true'
         run: |
           SUSFS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
-
           for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
             SUS_URL=$(echo "$SUSFS_JSON" | jq -r ".assets[] | select(.name | contains(\"${KMI}\") and endswith(\".ko\")) | .browser_download_url" | head -n 1)
             if [ "$SUS_URL" != "null" ] && [ -n "$SUS_URL" ]; then
@@ -123,21 +121,32 @@ jobs:
       - name: Upload ZIP to Telegram Channel (@Evil_twin_peridot)
         if: steps.check.outputs.should_build == 'true'
         run: |
-          CAPTION="⚡ *SukiSU-Ultra + SuSFS LKM Recovery Flasher*%0A%0A🔹 *SukiSU-Ultra:* \`${{ env.SUKI_TAG }}\`%0A🔹 *SuSFS LKM:* \`${{ env.SUSFS_TAG }}\`%0A🔹 *KMIs:* \`A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18\`%0A🔹 *Pre-Enabled:* \`AVC Spoofing | Hide SELinux | SuSFS Early Load\`%0A%0A📦 *Flash directly in TWRP / OrangeFox / Aera Recovery*"
+          CAPTION="⚡ <b>SukiSU-Ultra + SuSFS LKM Recovery Flasher</b>
 
-          # Try public @username first, fallback to numeric -1004367113991 channel ID
-          RESP=$(curl -s -F chat_id="${TG_CHAT_ID}" \
-            -F document=@"${{ env.ZIP_NAME }}" \
-            -F parse_mode="Markdown" \
-            -F caption="$(printf '%b' "${CAPTION//%/\\x}")" \
+          🔹 <b>SukiSU-Ultra:</b> <code>${{ env.SUKI_TAG }}</code>
+          🔹 <b>SuSFS LKM:</b> <code>${{ env.SUSFS_TAG }}</code>
+          🔹 <b>KMIs:</b> <code>A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18</code>
+          🔹 <b>Pre-Enabled:</b> <code>AVC Spoofing | Hide SELinux | SuSFS Early Load</code>
+
+          📦 <i>Flash directly in TWRP / OrangeFox / Aera Recovery</i>"
+
+          RESP=$(curl -s \
+            --form-string "chat_id=${TG_CHAT_ID}" \
+            -F "document=@${{ env.ZIP_NAME }}" \
+            --form-string "parse_mode=HTML" \
+            --form-string "caption=${CAPTION}" \
             "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument")
 
+          echo "Telegram API response: $RESP"
           OK=$(echo "$RESP" | jq -r .ok)
           if [ "$OK" != "true" ]; then
             echo "Fallback to numeric ID -1004367113991..."
-            curl -f -F chat_id="-1004367113991" \
-              -F document=@"${{ env.ZIP_NAME }}" \
-              -F parse_mode="Markdown" \
-              -F caption="$(printf '%b' "${CAPTION//%/\\x}")" \
-              "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument"
+            RESP2=$(curl -s \
+              --form-string "chat_id=-1004367113991" \
+              -F "document=@${{ env.ZIP_NAME }}" \
+              --form-string "parse_mode=HTML" \
+              --form-string "caption=${CAPTION}" \
+              "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument")
+            echo "Fallback response: $RESP2"
+            [ "$(echo "$RESP2" | jq -r .ok)" = "true" ] || exit 1
           fi
