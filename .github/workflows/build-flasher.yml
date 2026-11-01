@@ -1,27 +1,61 @@
-name: Build SukiSU-Ultra + SuSFS Recovery ZIP
+name: Auto-Sync & Build SukiSU-Ultra + SuSFS ZIP
 
 on:
   push:
     branches: [ "main" ]
+  schedule:
+    # Runs every 6 hours to check for new upstream SukiSU-Ultra or SuSFS LKM releases
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  sync_and_build:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout Template
-        uses: actions/checkout@v4
-
-      - name: Fetch Latest SukiSU-Ultra LKM & ksud
+      - name: Check Upstream Versions & Compare with Current Releases
+        id: check
         run: |
           SUKI_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
           SUKI_TAG=$(echo "$SUKI_JSON" | jq -r .tag_name)
+
+          SUSFS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
+          SUSFS_TAG=$(echo "$SUSFS_JSON" | jq -r .tag_name)
+
+          if [ -z "$SUKI_TAG" ] || [ "$SUKI_TAG" = "null" ] || [ -z "$SUSFS_TAG" ] || [ "$SUSFS_TAG" = "null" ]; then
+            echo "Failed to fetch upstream release tags!"
+            exit 1
+          fi
+
+          COMBINED_TAG="${SUKI_TAG}-${SUSFS_TAG}"
           echo "SUKI_TAG=$SUKI_TAG" >> $GITHUB_ENV
+          echo "SUSFS_TAG=$SUSFS_TAG" >> $GITHUB_ENV
+          echo "COMBINED_TAG=$COMBINED_TAG" >> $GITHUB_ENV
+
+          # Check if a release with this exact SukiSU + SuSFS version combo already exists
+          STATUS=$(curl -sL -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${COMBINED_TAG}")
+
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$STATUS" = "200" ]; then
+            echo "Release $COMBINED_TAG already exists. Skipping scheduled build."
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "Building release for $COMBINED_TAG (Event: ${{ github.event_name }})..."
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout Template
+        if: steps.check.outputs.should_build == 'true'
+        uses: actions/checkout@v4
+
+      - name: Fetch Latest SukiSU-Ultra LKM & ksud
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          SUKI_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
 
           KSUD_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select(.name == "ksud-aarch64-linux-android") | .browser_download_url')
           curl -fL "$KSUD_URL" -o ksud
@@ -35,10 +69,9 @@ jobs:
           done
 
       - name: Fetch Latest SuSFS LKM (inforcqb/susfs4ksu-for-lkm)
+        if: steps.check.outputs.should_build == 'true'
         run: |
           SUSFS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
-          SUSFS_TAG=$(echo "$SUSFS_JSON" | jq -r .tag_name)
-          echo "SUSFS_TAG=$SUSFS_TAG" >> $GITHUB_ENV
 
           for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
             SUS_URL=$(echo "$SUSFS_JSON" | jq -r ".assets[] | select(.name | contains(\"${KMI}\") and endswith(\".ko\")) | .browser_download_url" | head -n 1)
@@ -48,6 +81,7 @@ jobs:
           done
 
       - name: Fetch magiskboot (arm64)
+        if: steps.check.outputs.should_build == 'true'
         run: |
           MAGISK_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
           curl -fL "$MAGISK_URL" -o magisk.apk
@@ -56,6 +90,7 @@ jobs:
           rm -f magisk.apk
 
       - name: Generate source.txt & Package Flashable ZIP
+        if: steps.check.outputs.should_build == 'true'
         run: |
           cat << TXT > source.txt
           SukiSU-Ultra: ${{ env.SUKI_TAG }} (https://github.com/SukiSU-Ultra/SukiSU-Ultra)
@@ -68,10 +103,11 @@ jobs:
           zip -r9 "$ZIP_NAME" META-INF config.env source.txt ksud magiskboot *.ko
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
-      - name: Publish Release
+      - name: Publish or Update Release
+        if: steps.check.outputs.should_build == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "${{ env.SUKI_TAG }}-${{ github.run_number }}"
+          tag_name: "${{ env.COMBINED_TAG }}"
           name: "SukiSU-Ultra ${{ env.SUKI_TAG }} + SuSFS (${{ env.SUSFS_TAG }}) Flasher"
           files: ${{ env.ZIP_NAME }}
           generate_release_notes: true
