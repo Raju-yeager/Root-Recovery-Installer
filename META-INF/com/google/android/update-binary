@@ -1,7 +1,7 @@
 #!/sbin/sh
 OUTFD=$2
 ZIPFILE=$3
-TMPDIR=/dev/tmp/sukisu_install
+TMPDIR=/dev/tmp/izanami_install
 
 ui_print() {
   echo "ui_print $1" >&$OUTFD
@@ -9,9 +9,9 @@ ui_print() {
 }
 
 abort() {
-  ui_print "****************************************"
-  ui_print "! ERROR: $1"
-  ui_print "****************************************"
+  ui_print "========================================"
+  ui_print "! FATAL: $1"
+  ui_print "========================================"
   rm -rf "$TMPDIR"
   exit 1
 }
@@ -20,16 +20,20 @@ rm -rf "$TMPDIR"
 mkdir -p "$TMPDIR"
 cd "$TMPDIR" || abort "Unable to create temp directory"
 
-ui_print "****************************************"
-ui_print "   SukiSU-Ultra + SuSFS LKM Installer   "
-ui_print "****************************************"
-
 unzip -o "$ZIPFILE" -d "$TMPDIR" >&2
 chmod -R 755 "$TMPDIR"
 export PATH="$TMPDIR:$PATH"
 . "$TMPDIR/config.env"
 
-# 1. Detect KMI from running kernel
+VARIANT="${ROOT_VARIANT:-SukiSU-Ultra}"
+
+ui_print "========================================"
+ui_print " ⚡ PROJECT IZANAMI : UNIVERSAL ROOT ⚡ "
+ui_print "    Engine   : $VARIANT + SuSFS LKM     "
+ui_print "    Maintainer: @Raju_D_yeager          "
+ui_print "========================================"
+
+# 1. Universal Kernel / KMI Detection (Works on all Custom & Stock GKI 2.0+ Kernels)
 KERNEL_VER=$(uname -r)
 KMI=$(echo "$KERNEL_VER" | sed -nE 's/^([0-9]+\.[0-9]+).*-(android[0-9]+).*/\2-\1/p')
 if [ -z "$KMI" ]; then
@@ -45,13 +49,13 @@ if [ -z "$KMI" ]; then
   esac
 fi
 
-ui_print "- Detected Kernel: $KERNEL_VER"
-ui_print "- Target KMI: $KMI"
+ui_print "- Kernel  : $KERNEL_VER"
+ui_print "- Target  : $KMI"
 
 LKM_FILE="$TMPDIR/${KMI}_kernelsu.ko"
 [ -f "$LKM_FILE" ] || abort "Missing LKM for $KMI (${KMI}_kernelsu.ko)"
 
-# 2. Detect Active Slot & Target Boot Partition (init_boot preferred for GKI 2.0+)
+# 2. Universal Slot & Boot Partition Detection
 SLOT=$(getprop ro.boot.slot_suffix)
 [ -z "$SLOT" ] && SLOT=$(grep -o 'androidboot.slot_suffix=_[ab]' /proc/cmdline | cut -d= -f2)
 
@@ -66,13 +70,13 @@ for PART in "init_boot${SLOT}" "init_boot" "boot${SLOT}" "boot"; do
 done
 
 [ -n "$TARGET_PART" ] || abort "Could not locate init_boot or boot block device!"
-ui_print "- Target Partition: $PART_NAME ($TARGET_PART)"
+ui_print "- Partition: $PART_NAME ($TARGET_PART)"
 
-# 3. Dump and Patch Boot/Init_Boot Image via ksud
+# 3. Dump and Patch Boot/Init_Boot Image
 ui_print "- Dumping $PART_NAME..."
 dd if="$TARGET_PART" of="$TMPDIR/boot.img" bs=4096 2>/dev/null || abort "Failed to dump $PART_NAME"
 
-ui_print "- Patching ramdisk with SukiSU-Ultra LKM..."
+ui_print "- Injecting $VARIANT LKM into ramdisk..."
 "$TMPDIR/ksud" boot-patch \
   --boot "$TMPDIR/boot.img" \
   --module "$LKM_FILE" >&2 || abort "ksud boot-patch failed!"
@@ -83,16 +87,40 @@ PATCHED_IMG=$(ls "$TMPDIR"/kernelsu_patched_*.img "$TMPDIR"/sukisu_patched_*.img
 ui_print "- Flashing patched image to $PART_NAME..."
 dd if="$PATCHED_IMG" of="$TARGET_PART" bs=4096 2>/dev/null || abort "Failed to write patched image!"
 
-# 4. Stage ksud, SuSFS LKM, AVC Spoof & SELinux Hide in /data/adb
-ui_print "- Mounting /data to configure SuSFS & stealth flags..."
+# 4. Stage Daemon, Manager APK, SuSFS LKM & Stealth Flags
+ui_print "- Mounting /data to stage Izanami stealth modules..."
 mount /data 2>/dev/null
 if [ -d "/data/adb" ]; then
   mkdir -p /data/adb/ksu/bin /data/adb/post-fs-data.d /data/adb/service.d /data/adb/susfs4ksu
   cp -f "$TMPDIR/ksud" /data/adb/ksud
   chmod 755 /data/adb/ksud
 
+  if [ -f "$TMPDIR/manager.apk" ]; then
+    ui_print "- Staging $VARIANT Manager APK for auto-install..."
+    cp -f "$TMPDIR/manager.apk" /data/adb/ksu/manager.apk
+    chmod 644 /data/adb/ksu/manager.apk
+
+    cat << 'SCRIPT' > /data/adb/service.d/99_izanami_manager_install.sh
+#!/system/bin/sh
+(
+  until [ "$(getprop sys.boot_completed)" = "1" ]; do sleep 2; done
+  sleep 4
+  APK="/data/adb/ksu/manager.apk"
+  if [ -f "$APK" ]; then
+    cp -f "$APK" /data/local/tmp/izanami_mgr.apk
+    chmod 644 /data/local/tmp/izanami_mgr.apk
+    pm install -r /data/local/tmp/izanami_mgr.apk >/dev/null 2>&1 || \
+      cat /data/local/tmp/izanami_mgr.apk | pm install -r -S $(stat -c%s /data/local/tmp/izanami_mgr.apk) >/dev/null 2>&1
+    rm -f /data/local/tmp/izanami_mgr.apk "$APK"
+  fi
+  rm -f "$0"
+) &
+SCRIPT
+    chmod 755 /data/adb/service.d/99_izanami_manager_install.sh
+  fi
+
   if [ "$ENABLE_SUSFS_LKM" = "1" ] && [ -f "$TMPDIR/susfs_guard_lkm-${KMI}.ko" ]; then
-    ui_print "- Installing SuSFS LKM for $KMI..."
+    ui_print "- Staging SuSFS LKM ($KMI)..."
     cp -f "$TMPDIR/susfs_guard_lkm-${KMI}.ko" /data/adb/susfs4ksu/susfs_guard_lkm.ko
     chmod 644 /data/adb/susfs4ksu/susfs_guard_lkm.ko
   fi
@@ -100,39 +128,34 @@ if [ -d "/data/adb" ]; then
   cat << 'SCRIPT' > /data/adb/post-fs-data.d/00_sukisu_stealth.sh
 #!/system/bin/sh
 MODDIR=/data/adb/susfs4ksu
-
-# 1. Load SuSFS LKM early with expose_proc=1 so SukiSU Manager can control it
 if [ -f "$MODDIR/susfs_guard_lkm.ko" ] && [ ! -e "/proc/susfs_version" ]; then
   /data/adb/ksud insmod "$MODDIR/susfs_guard_lkm.ko" expose_proc=1
 fi
 SCRIPT
 
   if [ "$ENABLE_AVC_SPOOF" = "1" ]; then
-    ui_print "- Enabling AVC Log Spoofing..."
+    ui_print "- Configuring AVC Log Spoofing: ENABLED"
     cat << 'SCRIPT' >> /data/adb/post-fs-data.d/00_sukisu_stealth.sh
-# 2. Enable SukiSU-Ultra AVC Spoofing
 /data/adb/ksud feature set avc_spoof 1 2>/dev/null || echo 1 > /sys/module/kernelsu/parameters/enable_avc_spoof 2>/dev/null
 touch /data/adb/ksu/.avc_spoof_enabled
 SCRIPT
   fi
 
   if [ "$ENABLE_HIDE_SELINUX" = "1" ]; then
-    ui_print "- Enabling Hide SELinux Modifications..."
+    ui_print "- Configuring Hide SELinux Mod: ENABLED"
     cat << 'SCRIPT' >> /data/adb/post-fs-data.d/00_sukisu_stealth.sh
-# 3. Enable SELinux Modification Hiding
 /data/adb/ksud feature set hide_selinux 1 2>/dev/null || echo 1 > /sys/module/kernelsu/parameters/hide_selinux 2>/dev/null
 touch /data/adb/ksu/.hide_selinux_enabled
 SCRIPT
   fi
-
   chmod 755 /data/adb/post-fs-data.d/00_sukisu_stealth.sh
 else
-  ui_print "! /data is encrypted/unmounted; boot patch succeeded, configure flags in SukiSU Manager after boot."
+  ui_print "! /data is encrypted/unmounted; boot patch succeeded, install Manager APK after boot."
 fi
 
-ui_print "- Cleaning up..."
+ui_print "- Cleaning up temporary files..."
 rm -rf "$TMPDIR"
-ui_print "****************************************"
-ui_print "   Installation Complete! Reboot now.   "
-ui_print "****************************************"
+ui_print "========================================"
+ui_print " ✅ Flashed Successfully! By @Raju_D_yeager"
+ui_print "========================================"
 exit 0

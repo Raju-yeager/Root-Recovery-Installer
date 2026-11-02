@@ -4,8 +4,8 @@ on:
   push:
     paths:
       - '.github/workflows/build-ksun.yml'
+      - 'META-INF/com/google/android/update-binary'
   schedule:
-    # Check once daily at 12:30 UTC
     - cron: '30 12 * * *'
   workflow_dispatch:
     inputs:
@@ -31,12 +31,9 @@ jobs:
           KSUN_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/KernelSU-Next/KernelSU-Next/releases/latest)
           KSUN_TAG=$(echo "$KSUN_JSON" | jq -r .tag_name)
           IS_PRERELEASE=$(echo "$KSUN_JSON" | jq -r .prerelease)
-
-          # Extract clean SemVer (e.g. v3.4.1), ignore nightly/commit suffixes
           CORE_VER=$(echo "$KSUN_TAG" | grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+' || true)
 
           if [ -z "$CORE_VER" ] || [ "$IS_PRERELEASE" = "true" ]; then
-            echo "Skipping non-standard or pre-release KSUN tag: $KSUN_TAG"
             echo "should_build=false" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -54,10 +51,8 @@ jobs:
             "https://api.github.com/repos/${{ github.repository }}/releases/tags/${RELEASE_TAG}")
 
           if [ "${{ github.event_name }}" = "schedule" ] && [ "$STATUS" = "200" ]; then
-            echo "Release $RELEASE_TAG already published. Skipping."
             echo "should_build=false" >> $GITHUB_OUTPUT
           else
-            echo "Building KSUN + SuSFS release for $RELEASE_TAG..."
             echo "should_build=true" >> $GITHUB_OUTPUT
           fi
 
@@ -65,12 +60,15 @@ jobs:
         if: steps.check.outputs.should_build == 'true'
         uses: actions/checkout@v4
 
-      - name: Fetch KernelSU-Next LKM, ksud, SuSFS LKM & magiskboot
+      - name: Fetch KernelSU-Next LKM, Manager APK, SuSFS LKM & magiskboot
         if: steps.check.outputs.should_build == 'true'
         run: |
           KSUN_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/KernelSU-Next/KernelSU-Next/releases/latest)
           KSUD_URL=$(echo "$KSUN_JSON" | jq -r '.assets[] | select(.name == "ksud-aarch64-linux-android") | .browser_download_url')
           curl -fL "$KSUD_URL" -o ksud && chmod +x ksud
+
+          APK_URL=$(echo "$KSUN_JSON" | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
+          curl -fL "$APK_URL" -o manager.apk
 
           for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
             KO_URL=$(echo "$KSUN_JSON" | jq -r ".assets[] | select(.name | contains(\"${KMI}\") and endswith(\".ko\")) | .browser_download_url" | head -n 1)
@@ -91,18 +89,24 @@ jobs:
       - name: Package KernelSU-Next + SuSFS ZIP
         if: steps.check.outputs.should_build == 'true'
         run: |
-          sed -i 's/SukiSU-Ultra + SuSFS LKM Installer/KernelSU-Next + SuSFS LKM Installer/g' META-INF/com/google/android/update-binary
-          sed -i 's/Patching ramdisk with SukiSU-Ultra LKM/Patching ramdisk with KernelSU-Next LKM/g' META-INF/com/google/android/update-binary
+          cat << 'CONF' > config.env
+          ROOT_VARIANT="KernelSU-Next"
+          ENABLE_SUSFS_LKM=1
+          ENABLE_SUSFS_EARLY_LOAD=1
+          ENABLE_AVC_SPOOF=1
+          ENABLE_HIDE_SELINUX=1
+          CONF
 
           cat << TXT > source.txt
+          Project Izanami Universal Root Installer — By @Raju_D_yeager
           KernelSU-Next: ${{ env.KSUN_TAG }} (https://github.com/KernelSU-Next/KernelSU-Next)
           SuSFS-LKM: ${{ env.SUSFS_TAG }} (https://github.com/inforcqb/susfs4ksu-for-lkm)
-          Defaults: AVC_SPOOF=ON | HIDE_SELINUX=ON | SUSFS_EXPOSE_PROC=ON
+          Defaults: AVC_SPOOF=ON | HIDE_SELINUX=ON | SUSFS_EXPOSE_PROC=ON | AUTO_APK=ON
           Build Date: $(date -u +"%Y-%m-%d %H:%M UTC")
           TXT
 
-          ZIP_NAME="KernelSU_Next_${{ env.CORE_VER }}_SuSFS_${{ env.SUSFS_TAG }}_Recovery.zip"
-          zip -r9 "$ZIP_NAME" META-INF config.env source.txt ksud magiskboot *.ko
+          ZIP_NAME="Izanami_KernelSU_Next_${{ env.CORE_VER }}_SuSFS_${{ env.SUSFS_TAG }}_Recovery.zip"
+          zip -r9 "$ZIP_NAME" META-INF config.env source.txt ksud magiskboot manager.apk *.ko
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Publish GitHub Release
@@ -110,21 +114,22 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "${{ env.RELEASE_TAG }}"
-          name: "KernelSU-Next ${{ env.CORE_VER }} + SuSFS (${{ env.SUSFS_TAG }}) Flasher"
+          name: "⚡ Izanami KernelSU-Next ${{ env.CORE_VER }} + SuSFS (${{ env.SUSFS_TAG }})"
           files: ${{ env.ZIP_NAME }}
           generate_release_notes: true
 
       - name: Upload to Telegram Channel (@Evil_twin_peridot)
         if: steps.check.outputs.should_build == 'true'
         run: |
-          CAPTION="⚡ <b>KernelSU-Next + SuSFS LKM Recovery Flasher</b>
+          CAPTION="⚡ <b>PROJECT IZANAMI : KernelSU-Next + SuSFS LKM</b>
+          👤 <b>Maintainer:</b> @Raju_D_yeager
 
-          🔹 <b>KernelSU-Next:</b> <code>${{ env.CORE_VER }}</code>
+          🔹 <b>KernelSU-Next:</b> <code>${{ env.CORE_VER }}</code> (Manager APK Bundled)
           🔹 <b>SuSFS LKM:</b> <code>${{ env.SUSFS_TAG }}</code>
-          🔹 <b>KMIs:</b> <code>A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18</code>
+          🔹 <b>Universal KMIs:</b> <code>A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18</code>
           🔹 <b>Pre-Enabled:</b> <code>AVC Spoofing | Hide SELinux | SuSFS Early Load</code>
 
-          📦 <i>Flash directly in TWRP / OrangeFox / Aera Recovery</i>"
+          📦 <i>Universal GKI 2.0+ Recovery Flasher (Auto-patches init_boot/boot & auto-installs Manager APK)</i>"
 
           RESP=$(curl -s \
             --form-string "chat_id=${TG_CHAT_ID}" \
