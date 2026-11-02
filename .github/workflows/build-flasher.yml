@@ -56,14 +56,15 @@ jobs:
         if: steps.check.outputs.should_build == 'true'
         uses: actions/checkout@v4
 
-      - name: Fetch SukiSU-Ultra, Manager APK, SuSFS LKM & magiskboot
+      - name: Fetch SukiSU-Ultra, Spoofed Manager APK, SuSFS LKM & magiskboot
         if: steps.check.outputs.should_build == 'true'
         run: |
           SUKI_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
           KSUD_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select(.name == "ksud-aarch64-linux-android") | .browser_download_url')
           curl -fL "$KSUD_URL" -o ksud && chmod +x ksud
 
-          APK_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select(.name | contains("spoofed") and endswith(".apk")) | .browser_download_url' | head -n 1)
+          # Prefer Spoofed APK (case-insensitive)
+          APK_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select((.name | ascii_downcase | contains("spoof")) and (.name | endswith(".apk"))) | .browser_download_url' | head -n 1)
           if [ -z "$APK_URL" ] || [ "$APK_URL" = "null" ]; then
             APK_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
           fi
@@ -97,14 +98,14 @@ jobs:
           CONF
 
           cat << TXT > source.txt
-          Project Izanami Universal Root Installer — By @Raju_D_yeager
+          AegisRoot Universal Root Installer — By @Raju_D_yeager
           SukiSU-Ultra: ${{ env.SUKI_TAG }} (https://github.com/SukiSU-Ultra/SukiSU-Ultra)
           SuSFS-LKM: ${{ env.SUSFS_TAG }} (https://github.com/inforcqb/susfs4ksu-for-lkm)
-          Defaults: AVC_SPOOF=ON | HIDE_SELINUX=ON | SUSFS_EXPOSE_PROC=ON | AUTO_APK=ON
+          Defaults: AVC_SPOOF=ON | HIDE_SELINUX=ON | SUSFS_EXPOSE_PROC=ON | SPOOFED_APK=ON
           Build Date: $(date -u +"%Y-%m-%d %H:%M UTC")
           TXT
 
-          ZIP_NAME="Izanami_SukiSU_Ultra_${{ env.CORE_VER }}_SuSFS_${{ env.SUSFS_TAG }}_Recovery.zip"
+          ZIP_NAME="SukiSU_Ultra_${{ env.CORE_VER }}_SuSFS_${{ env.SUSFS_TAG }}_Universal_Installer.zip"
           zip -r9 "$ZIP_NAME" META-INF config.env source.txt ksud magiskboot manager.apk *.ko
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
@@ -113,14 +114,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "${{ env.RELEASE_TAG }}"
-          name: "⚡ Izanami SukiSU-Ultra ${{ env.CORE_VER }} + SuSFS (${{ env.SUSFS_TAG }})"
+          name: "⚡ SukiSU-Ultra ${{ env.CORE_VER }} + SuSFS (${{ env.SUSFS_TAG }}) Universal Installer"
           files: ${{ env.ZIP_NAME }}
           generate_release_notes: true
 
       - name: Upload to Telegram Channel (@Evil_twin_peridot)
         if: steps.check.outputs.should_build == 'true'
         run: |
-          CAPTION="⚡ <b>PROJECT IZANAMI : SukiSU-Ultra + SuSFS LKM</b>
+          CAPTION="⚡ <b>AEGIS-ROOT : SukiSU-Ultra + SuSFS LKM Installer</b>
           👤 <b>Maintainer:</b> @Raju_D_yeager
 
           🔹 <b>SukiSU-Ultra:</b> <code>${{ env.CORE_VER }}</code> (Spoofed APK Bundled)
@@ -128,7 +129,7 @@ jobs:
           🔹 <b>Universal KMIs:</b> <code>A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18</code>
           🔹 <b>Pre-Enabled:</b> <code>AVC Spoofing | Hide SELinux | SuSFS Early Load</code>
 
-          📦 <i>Universal GKI 2.0+ Recovery Flasher (Auto-patches init_boot/boot & auto-installs Manager APK)</i>"
+          📦 <i>Universal GKI 2.0+ Root Flasher for Any Kernel/Device (Auto-patches init_boot/boot & auto-installs Spoofed Manager APK)</i>"
 
           RESP=$(curl -s \
             --form-string "chat_id=${TG_CHAT_ID}" \
