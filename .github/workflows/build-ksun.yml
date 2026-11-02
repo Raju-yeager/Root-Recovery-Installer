@@ -1,0 +1,143 @@
+name: KernelSU-Next + SuSFS Builder
+
+on:
+  push:
+    paths:
+      - '.github/workflows/build-ksun.yml'
+  schedule:
+    # Check once daily at 12:30 UTC
+    - cron: '30 12 * * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force rebuild even if version already exists'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: write
+
+jobs:
+  build_ksun:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+    steps:
+      - name: Check for Major/Official KernelSU-Next Release
+        id: check
+        run: |
+          KSUN_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/KernelSU-Next/KernelSU-Next/releases/latest)
+          KSUN_TAG=$(echo "$KSUN_JSON" | jq -r .tag_name)
+          IS_PRERELEASE=$(echo "$KSUN_JSON" | jq -r .prerelease)
+
+          # Extract clean SemVer (e.g. v3.4.1), ignore nightly/commit suffixes
+          CORE_VER=$(echo "$KSUN_TAG" | grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+' || true)
+
+          if [ -z "$CORE_VER" ] || [ "$IS_PRERELEASE" = "true" ]; then
+            echo "Skipping non-standard or pre-release KSUN tag: $KSUN_TAG"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          SUSFS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
+          SUSFS_TAG=$(echo "$SUSFS_JSON" | jq -r .tag_name)
+
+          RELEASE_TAG="ksun-${CORE_VER}"
+          echo "KSUN_TAG=$KSUN_TAG" >> $GITHUB_ENV
+          echo "CORE_VER=$CORE_VER" >> $GITHUB_ENV
+          echo "SUSFS_TAG=$SUSFS_TAG" >> $GITHUB_ENV
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+
+          STATUS=$(curl -sL -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${RELEASE_TAG}")
+
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$STATUS" = "200" ]; then
+            echo "Release $RELEASE_TAG already published. Skipping."
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "Building KSUN + SuSFS release for $RELEASE_TAG..."
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout Template
+        if: steps.check.outputs.should_build == 'true'
+        uses: actions/checkout@v4
+
+      - name: Fetch KernelSU-Next LKM, ksud, SuSFS LKM & magiskboot
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          KSUN_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/KernelSU-Next/KernelSU-Next/releases/latest)
+          KSUD_URL=$(echo "$KSUN_JSON" | jq -r '.assets[] | select(.name == "ksud-aarch64-linux-android") | .browser_download_url')
+          curl -fL "$KSUD_URL" -o ksud && chmod +x ksud
+
+          for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
+            KO_URL=$(echo "$KSUN_JSON" | jq -r ".assets[] | select(.name | contains(\"${KMI}\") and endswith(\".ko\")) | .browser_download_url" | head -n 1)
+            [ "$KO_URL" != "null" ] && [ -n "$KO_URL" ] && curl -fL "$KO_URL" -o "${KMI}_kernelsu.ko"
+          done
+
+          SUSFS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
+          for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
+            SUS_URL=$(echo "$SUSFS_JSON" | jq -r ".assets[] | select(.name | contains(\"${KMI}\") and endswith(\".ko\")) | .browser_download_url" | head -n 1)
+            [ "$SUS_URL" != "null" ] && [ -n "$SUS_URL" ] && curl -fL "$SUS_URL" -o "susfs_guard_lkm-${KMI}.ko"
+          done
+
+          MAGISK_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
+          curl -fL "$MAGISK_URL" -o magisk.apk
+          unzip -p magisk.apk lib/arm64-v8a/libmagiskboot.so > magiskboot
+          chmod +x magiskboot && rm -f magisk.apk
+
+      - name: Package KernelSU-Next + SuSFS ZIP
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          sed -i 's/SukiSU-Ultra + SuSFS LKM Installer/KernelSU-Next + SuSFS LKM Installer/g' META-INF/com/google/android/update-binary
+          sed -i 's/Patching ramdisk with SukiSU-Ultra LKM/Patching ramdisk with KernelSU-Next LKM/g' META-INF/com/google/android/update-binary
+
+          cat << TXT > source.txt
+          KernelSU-Next: ${{ env.KSUN_TAG }} (https://github.com/KernelSU-Next/KernelSU-Next)
+          SuSFS-LKM: ${{ env.SUSFS_TAG }} (https://github.com/inforcqb/susfs4ksu-for-lkm)
+          Defaults: AVC_SPOOF=ON | HIDE_SELINUX=ON | SUSFS_EXPOSE_PROC=ON
+          Build Date: $(date -u +"%Y-%m-%d %H:%M UTC")
+          TXT
+
+          ZIP_NAME="KernelSU_Next_${{ env.CORE_VER }}_SuSFS_${{ env.SUSFS_TAG }}_Recovery.zip"
+          zip -r9 "$ZIP_NAME" META-INF config.env source.txt ksud magiskboot *.ko
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Publish GitHub Release
+        if: steps.check.outputs.should_build == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{ env.RELEASE_TAG }}"
+          name: "KernelSU-Next ${{ env.CORE_VER }} + SuSFS (${{ env.SUSFS_TAG }}) Flasher"
+          files: ${{ env.ZIP_NAME }}
+          generate_release_notes: true
+
+      - name: Upload to Telegram Channel (@Evil_twin_peridot)
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          CAPTION="⚡ <b>KernelSU-Next + SuSFS LKM Recovery Flasher</b>
+
+          🔹 <b>KernelSU-Next:</b> <code>${{ env.CORE_VER }}</code>
+          🔹 <b>SuSFS LKM:</b> <code>${{ env.SUSFS_TAG }}</code>
+          🔹 <b>KMIs:</b> <code>A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18</code>
+          🔹 <b>Pre-Enabled:</b> <code>AVC Spoofing | Hide SELinux | SuSFS Early Load</code>
+
+          📦 <i>Flash directly in TWRP / OrangeFox / Aera Recovery</i>"
+
+          RESP=$(curl -s \
+            --form-string "chat_id=${TG_CHAT_ID}" \
+            -F "document=@${{ env.ZIP_NAME }}" \
+            --form-string "parse_mode=HTML" \
+            --form-string "caption=${CAPTION}" \
+            "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument")
+
+          if [ "$(echo "$RESP" | jq -r .ok)" != "true" ]; then
+            curl -s \
+              --form-string "chat_id=-1004367113991" \
+              -F "document=@${{ env.ZIP_NAME }}" \
+              --form-string "parse_mode=HTML" \
+              --form-string "caption=${CAPTION}" \
+              "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument"
+          fi

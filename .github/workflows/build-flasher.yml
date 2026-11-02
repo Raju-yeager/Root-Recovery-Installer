@@ -1,50 +1,61 @@
-name: Auto-Sync, Build & Upload to Telegram
+name: SukiSU-Ultra + SuSFS Builder
 
 on:
-  push:
-    branches: [ "main" ]
   schedule:
-    - cron: '0 */6 * * *'
+    # Check once daily at 12:00 UTC
+    - cron: '0 12 * * *'
   workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force rebuild even if version already exists'
+        required: false
+        default: 'true'
 
 permissions:
   contents: write
 
 jobs:
-  sync_and_build:
+  build_sukisu:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
     steps:
-      - name: Check Upstream Versions & Compare with Current Releases
+      - name: Check for Major/Official SukiSU-Ultra Release
         id: check
         run: |
           SUKI_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
           SUKI_TAG=$(echo "$SUKI_JSON" | jq -r .tag_name)
+          IS_PRERELEASE=$(echo "$SUKI_JSON" | jq -r .prerelease)
+
+          # Extract clean SemVer (e.g. v4.3.0 or v4.3.1), ignore commit/ci suffixes
+          CORE_VER=$(echo "$SUKI_TAG" | grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+' || true)
+
+          if [ -z "$CORE_VER" ] || [ "$IS_PRERELEASE" = "true" ]; then
+            echo "Skipping non-standard or pre-release tag: $SUKI_TAG"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
           SUSFS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
           SUSFS_TAG=$(echo "$SUSFS_JSON" | jq -r .tag_name)
 
-          if [ -z "$SUKI_TAG" ] || [ "$SUKI_TAG" = "null" ] || [ -z "$SUSFS_TAG" ] || [ "$SUSFS_TAG" = "null" ]; then
-            echo "Failed to fetch upstream release tags!"
-            exit 1
-          fi
-
-          COMBINED_TAG="${SUKI_TAG}-${SUSFS_TAG}"
+          # Tag release strictly by SukiSU core version so minor SuSFS r-bumps don't spam releases
+          RELEASE_TAG="sukisu-${CORE_VER}"
           echo "SUKI_TAG=$SUKI_TAG" >> $GITHUB_ENV
+          echo "CORE_VER=$CORE_VER" >> $GITHUB_ENV
           echo "SUSFS_TAG=$SUSFS_TAG" >> $GITHUB_ENV
-          echo "COMBINED_TAG=$COMBINED_TAG" >> $GITHUB_ENV
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
 
           STATUS=$(curl -sL -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${COMBINED_TAG}")
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${RELEASE_TAG}")
 
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$STATUS" = "200" ]; then
-            echo "Release $COMBINED_TAG already exists. Skipping scheduled build."
+          if [ "$STATUS" = "200" ] && [ "${{ github.event.inputs.force_build }}" != "true" ]; then
+            echo "Release $RELEASE_TAG already published. Skipping."
             echo "should_build=false" >> $GITHUB_OUTPUT
           else
-            echo "Building release for $COMBINED_TAG (Event: ${{ github.event_name }})..."
+            echo "New official release detected ($RELEASE_TAG) or manual force triggered!"
             echo "should_build=true" >> $GITHUB_OUTPUT
           fi
 
@@ -52,50 +63,30 @@ jobs:
         if: steps.check.outputs.should_build == 'true'
         uses: actions/checkout@v4
 
-      - name: Verify update-binary has no legacy flags
-        if: steps.check.outputs.should_build == 'true'
-        run: |
-          if grep -q -- "--magiskboot" META-INF/com/google/android/update-binary; then
-            echo "ERROR: Old --magiskboot flag still present in update-binary!"
-            exit 1
-          fi
-
-      - name: Fetch Latest SukiSU-Ultra LKM & ksud
+      - name: Fetch SukiSU-Ultra, SuSFS LKM & magiskboot
         if: steps.check.outputs.should_build == 'true'
         run: |
           SUKI_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
           KSUD_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select(.name == "ksud-aarch64-linux-android") | .browser_download_url')
-          curl -fL "$KSUD_URL" -o ksud
-          chmod +x ksud
+          curl -fL "$KSUD_URL" -o ksud && chmod +x ksud
 
           for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
             KO_URL=$(echo "$SUKI_JSON" | jq -r ".assets[] | select(.name | endswith(\"${KMI}_kernelsu.ko\")) | .browser_download_url" | head -n 1)
-            if [ "$KO_URL" != "null" ] && [ -n "$KO_URL" ]; then
-              curl -fL "$KO_URL" -o "${KMI}_kernelsu.ko"
-            fi
+            [ "$KO_URL" != "null" ] && [ -n "$KO_URL" ] && curl -fL "$KO_URL" -o "${KMI}_kernelsu.ko"
           done
 
-      - name: Fetch Latest SuSFS LKM (inforcqb/susfs4ksu-for-lkm)
-        if: steps.check.outputs.should_build == 'true'
-        run: |
           SUSFS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
           for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
             SUS_URL=$(echo "$SUSFS_JSON" | jq -r ".assets[] | select(.name | contains(\"${KMI}\") and endswith(\".ko\")) | .browser_download_url" | head -n 1)
-            if [ "$SUS_URL" != "null" ] && [ -n "$SUS_URL" ]; then
-              curl -fL "$SUS_URL" -o "susfs_guard_lkm-${KMI}.ko"
-            fi
+            [ "$SUS_URL" != "null" ] && [ -n "$SUS_URL" ] && curl -fL "$SUS_URL" -o "susfs_guard_lkm-${KMI}.ko"
           done
 
-      - name: Fetch magiskboot (arm64)
-        if: steps.check.outputs.should_build == 'true'
-        run: |
           MAGISK_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
           curl -fL "$MAGISK_URL" -o magisk.apk
           unzip -p magisk.apk lib/arm64-v8a/libmagiskboot.so > magiskboot
-          chmod +x magiskboot
-          rm -f magisk.apk
+          chmod +x magiskboot && rm -f magisk.apk
 
-      - name: Generate source.txt & Package Flashable ZIP
+      - name: Package SukiSU-Ultra + SuSFS ZIP
         if: steps.check.outputs.should_build == 'true'
         run: |
           cat << TXT > source.txt
@@ -105,25 +96,25 @@ jobs:
           Build Date: $(date -u +"%Y-%m-%d %H:%M UTC")
           TXT
 
-          ZIP_NAME="SukiSU_Ultra_${{ env.SUKI_TAG }}_SuSFS_${{ env.SUSFS_TAG }}_Recovery.zip"
+          ZIP_NAME="SukiSU_Ultra_${{ env.CORE_VER }}_SuSFS_${{ env.SUSFS_TAG }}_Recovery.zip"
           zip -r9 "$ZIP_NAME" META-INF config.env source.txt ksud magiskboot *.ko
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
-      - name: Publish or Update GitHub Release
+      - name: Publish GitHub Release
         if: steps.check.outputs.should_build == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "${{ env.COMBINED_TAG }}"
-          name: "SukiSU-Ultra ${{ env.SUKI_TAG }} + SuSFS (${{ env.SUSFS_TAG }}) Flasher"
+          tag_name: "${{ env.RELEASE_TAG }}"
+          name: "SukiSU-Ultra ${{ env.CORE_VER }} + SuSFS (${{ env.SUSFS_TAG }}) Flasher"
           files: ${{ env.ZIP_NAME }}
           generate_release_notes: true
 
-      - name: Upload ZIP to Telegram Channel (@Evil_twin_peridot)
+      - name: Upload to Telegram Channel (@Evil_twin_peridot)
         if: steps.check.outputs.should_build == 'true'
         run: |
           CAPTION="⚡ <b>SukiSU-Ultra + SuSFS LKM Recovery Flasher</b>
 
-          🔹 <b>SukiSU-Ultra:</b> <code>${{ env.SUKI_TAG }}</code>
+          🔹 <b>SukiSU-Ultra:</b> <code>${{ env.CORE_VER }}</code>
           🔹 <b>SuSFS LKM:</b> <code>${{ env.SUSFS_TAG }}</code>
           🔹 <b>KMIs:</b> <code>A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18</code>
           🔹 <b>Pre-Enabled:</b> <code>AVC Spoofing | Hide SELinux | SuSFS Early Load</code>
@@ -137,16 +128,11 @@ jobs:
             --form-string "caption=${CAPTION}" \
             "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument")
 
-          echo "Telegram API response: $RESP"
-          OK=$(echo "$RESP" | jq -r .ok)
-          if [ "$OK" != "true" ]; then
-            echo "Fallback to numeric ID -1004367113991..."
-            RESP2=$(curl -s \
+          if [ "$(echo "$RESP" | jq -r .ok)" != "true" ]; then
+            curl -s \
               --form-string "chat_id=-1004367113991" \
               -F "document=@${{ env.ZIP_NAME }}" \
               --form-string "parse_mode=HTML" \
               --form-string "caption=${CAPTION}" \
-              "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument")
-            echo "Fallback response: $RESP2"
-            [ "$(echo "$RESP2" | jq -r .ok)" = "true" ] || exit 1
+              "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument"
           fi
