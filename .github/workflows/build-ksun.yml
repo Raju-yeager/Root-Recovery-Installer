@@ -65,7 +65,7 @@ jobs:
         run: |
           KSUN_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/KernelSU-Next/KernelSU-Next/releases/latest)
           KSUD_URL=$(echo "$KSUN_JSON" | jq -r '.assets[] | select(.name == "ksud-aarch64-linux-android") | .browser_download_url')
-          curl -fL "$KSUN_URL" -o ksud 2>/dev/null || curl -fL "$KSUD_URL" -o ksud
+          curl -fL "$KSUD_URL" -o ksud
           chmod +x ksud
 
           # Prefer Spoofed KSUN APK (case-insensitive), fallback to standard APK
