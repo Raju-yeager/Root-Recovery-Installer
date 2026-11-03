@@ -1,0 +1,36 @@
+<svg viewBox="0 0 900 230" width="900" height="230" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#090716"/>
+      <stop offset="50%" stop-color="#24174a"/>
+      <stop offset="100%" stop-color="#ff0055"/>
+    </linearGradient>
+    <linearGradient id="neon" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00f5d4"/>
+      <stop offset="50%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#ff0055"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="900" height="230" rx="18" fill="url(#bg)"/>
+
+  <path d="M0,185 Q225,135 450,185 T900,175 L900,230 L0,230 Z" fill="#0d1117" opacity="0.7">
+    <animate attributeName="d" dur="6s" repeatCount="indefinite"
+      values="M0,185 Q225,135 450,185 T900,175 L900,230 L0,230 Z;
+              M0,175 Q225,215 450,170 T900,190 L900,230 L0,230 Z;
+              M0,185 Q225,135 450,185 T900,175 L900,230 L0,230 Z"/>
+  </path>
+
+  <text x="450" y="95" font-family="monospace, sans-serif" font-size="58" font-weight="900" fill="url(#neon)" text-anchor="middle" letter-spacing="4">
+    AEGIS-ROOT
+  </text>
+
+  <text x="450" y="136" font-family="monospace, sans-serif" font-size="19" font-weight="700" fill="#e2e8f0" text-anchor="middle" letter-spacing="1.5">
+    UNIVERSAL GKI 2.0+ ROOT &amp; SUSFS LKM AUTO-PATCHER
+  </text>
+
+  <rect x="220" y="152" width="460" height="28" rx="14" fill="#090716" opacity="0.8" stroke="#00f5d4" stroke-width="1.5"/>
+  <text x="450" y="171" font-family="monospace, sans-serif" font-size="14" font-weight="700" fill="#00f5d4" text-anchor="middle" letter-spacing="1">
+    SUKISU-ULTRA  |  KERNELSU-NEXT  |  @RAJU_D_YEAGER
+  </text>
+</svg>
