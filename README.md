@@ -1,10 +1,6 @@
 <div align="center">
 
-<img src="[https://raw.githubusercontent.com/Raju-yeager/SukiSU-Ultra-Flasher/main/assets/header.svg](https://raw.githubusercontent.com/Raju-yeager/SukiSU-Ultra-Flasher/main/assets/header.svg)" width="100%" alt="AegisRoot Banner"/>
-
-<a href="[https://github.com/Raju-yeager/SukiSU-Ultra-Flasher](https://github.com/Raju-yeager/SukiSU-Ultra-Flasher)">
-  <img src="[https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=20&duration=3000&pause=800&color=FF0055&center=true&vCenter=true&width=780&lines=Universal+Recovery-Flashable+Root+Installer;SukiSU-Ultra+%2B+KernelSU-Next+%2B+SuSFS+LKM;AVC+Log+Spoofing+%26+SELinux+Stealth+Out-of-the-Box;Auto-Patches+init_boot+%2F+boot+%26+Auto-Installs+Spoofed+APK;Maintained+by+%40Raju_D_yeager](https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=20&duration=3000&pause=800&color=FF0055&center=true&vCenter=true&width=780&lines=Universal+Recovery-Flashable+Root+Installer;SukiSU-Ultra+%2B+KernelSU-Next+%2B+SuSFS+LKM;AVC+Log+Spoofing+%26+SELinux+Stealth+Out-of-the-Box;Auto-Patches+init_boot+%2F+boot+%26+Auto-Installs+Spoofed+APK;Maintained+by+%40Raju_D_yeager)" alt="Typing SVG" />
-</a>
+![AegisRoot Banner](./assets/header.svg)
 
 <br/>
 
@@ -95,5 +91,7 @@ ENABLE_HIDE_SELINUX=1
   * [Magisk (`topjohnwu`)](https://github.com/topjohnwu/Magisk)
 
 <div align="center">
-  <img src="[https://raw.githubusercontent.com/Raju-yeager/SukiSU-Ultra-Flasher/main/assets/footer.svg](https://raw.githubusercontent.com/Raju-yeager/SukiSU-Ultra-Flasher/main/assets/footer.svg)" width="100%" alt="AegisRoot Footer"/>
+
+![AegisRoot Footer](./assets/footer.svg)
+
 </div>
