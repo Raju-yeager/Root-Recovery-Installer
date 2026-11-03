@@ -61,28 +61,52 @@ SLOT=$(getprop ro.boot.slot_suffix)
 [ -z "$SLOT" ] && SLOT=$(grep -o 'androidboot.slot_suffix=_[ab]' /proc/cmdline | cut -d= -f2)
 
 TARGET_PART=""
-for PART in "init_boot${SLOT}" "init_boot" "boot${SLOT}" "boot"; do
+PART_TYPE=""
+for PART in "init_boot${SLOT}" "init_boot"; do
   BLK=$(find /dev/block -name "$PART" | head -n 1)
   if [ -n "$BLK" ]; then
     TARGET_PART="$BLK"
     PART_NAME="$PART"
+    PART_TYPE="init_boot"
     break
   fi
 done
 
+if [ -z "$TARGET_PART" ]; then
+  for PART in "boot${SLOT}" "boot"; do
+    BLK=$(find /dev/block -name "$PART" | head -n 1)
+    if [ -n "$BLK" ]; then
+      TARGET_PART="$BLK"
+      PART_NAME="$PART"
+      PART_TYPE="boot"
+      break
+    fi
+  done
+fi
+
 [ -n "$TARGET_PART" ] || abort "Could not locate init_boot or boot block device!"
-ui_print "- Partition: $PART_NAME ($TARGET_PART)"
+ui_print "- Partition: $PART_NAME ($TARGET_PART) [Type: $PART_TYPE]"
 
-# 3. Dump and Patch Boot/Init_Boot Image
+# 3. Dump and Patch Image via ksud
 ui_print "- Dumping $PART_NAME..."
-dd if="$TARGET_PART" of="$TMPDIR/boot.img" bs=4096 2>/dev/null || abort "Failed to dump $PART_NAME"
+dd if="$TARGET_PART" of="$TMPDIR/target.img" bs=4096 2>/dev/null || abort "Failed to dump $PART_NAME"
 
-ui_print "- Patching ramdisk with $VARIANT LKM..."
-"$TMPDIR/ksud" boot-patch \
-  --boot "$TMPDIR/boot.img" \
-  --module "$LKM_FILE" >&2 || abort "ksud boot-patch failed!"
+ui_print "- Patching image with $VARIANT LKM..."
+if [ "$PART_TYPE" = "init_boot" ]; then
+  # init_boot contains purely ramdisk; tell ksud it's a ramdisk image
+  "$TMPDIR/ksud" boot-patch \
+    --ramdisk "$TMPDIR/target.img" \
+    --module "$LKM_FILE" \
+    --kmi "$KMI" >&2 || abort "ksud boot-patch failed!"
+else
+  # standard boot image containing both kernel and ramdisk
+  "$TMPDIR/ksud" boot-patch \
+    --boot "$TMPDIR/target.img" \
+    --module "$LKM_FILE" \
+    --kmi "$KMI" >&2 || abort "ksud boot-patch failed!"
+fi
 
-PATCHED_IMG=$(ls "$TMPDIR"/kernelsu_patched_*.img "$TMPDIR"/sukisu_patched_*.img 2>/dev/null | head -n 1)
+PATCHED_IMG=$(ls "$TMPDIR"/kernelsu_patched_*.img "$TMPDIR"/sukisu_patched_*.img "$TMPDIR"/ramdisk_patched_*.img 2>/dev/null | head -n 1)
 [ -f "$PATCHED_IMG" ] || abort "Patched image not found!"
 
 ui_print "- Flashing patched image to $PART_NAME..."
@@ -100,78 +124,31 @@ if [ -d "/data/adb" ]; then
     ui_print "- Staging $VARIANT Spoofed Manager APK..."
     cp -f "$TMPDIR/manager.apk" /data/adb/ksu/manager.apk
     chmod 644 /data/adb/ksu/manager.apk
-    # Also drop a copy in /sdcard/Download so user always has a backup APK if needed
     [ -d "/data/media/0/Download" ] && cp -f "$TMPDIR/manager.apk" "/data/media/0/Download/${VARIANT}_Spoofed_Manager.apk"
 
-    rm -f /data/adb/service.d/99_izanami_manager_install.sh
     cat << 'SCRIPT' > /data/adb/service.d/99_aegis_manager_install.sh
 #!/system/bin/sh
 (
   LOG="/data/adb/ksu/apk_install.log"
   APK="/data/adb/ksu/manager.apk"
-  echo "[$(date)] Starting AegisRoot APK auto-installer..." > "$LOG"
-
-  # 1. Wait for Android boot_completed AND User 0 FBE credential unlock (lockscreen unlocked)
   until [ "$(getprop sys.boot_completed)" = "1" ] && [ -d "/sdcard/Android" ]; do
     sleep 3
   done
   sleep 5
-
-  if [ ! -f "$APK" ]; then
-    echo "APK not found at $APK, exiting." >> "$LOG"
-    rm -f "$0"
-    exit 0
-  fi
-
-  # 2. Bypass HyperOS / MIUI / Play Protect background install blocks temporarily
-  settings put global verifier_verify_adb_installs 0 2>/dev/null
-  settings put global package_verifier_enable 0 2>/dev/null
-
-  # 3. Copy to /data/local/tmp with system_file SELinux context & world-readable perms
-  TMP_APK="/data/local/tmp/aegis_mgr.apk"
-  cp -f "$APK" "$TMP_APK"
-  chown shell:shell "$TMP_APK" 2>/dev/null
-  chmod 644 "$TMP_APK"
-  chcon u:object_r:apk_data_file:s0 "$TMP_APK" 2>/dev/null || chcon u:object_r:system_file:s0 "$TMP_APK" 2>/dev/null
-
-  SIZE=$(stat -c%s "$TMP_APK" 2>/dev/null || wc -c < "$TMP_APK")
-  INSTALLED=0
-
-  # Retry up to 5 times after screen unlock
-  for TRY in 1 2 3 4 5; do
-    echo "[Try $TRY] Attempting pm install session (size=$SIZE)..." >> "$LOG"
-
-    # Method 1: Stream into PackageInstaller session (bypasses all SELinux path checks)
+  if [ -f "$APK" ]; then
+    TMP_APK="/data/local/tmp/aegis_mgr.apk"
+    cp -f "$APK" "$TMP_APK"
+    chmod 644 "$TMP_APK"
     SID=$(cmd package install-create -r -t --user 0 | grep -oE '[0-9]+' | head -n 1)
     if [ -n "$SID" ]; then
-      cat "$TMP_APK" | cmd package install-write -S "$SIZE" "$SID" base.apk >> "$LOG" 2>&1
-      RES=$(cmd package install-commit "$SID" 2>&1)
-      echo "Session commit result: $RES" >> "$LOG"
-      if echo "$RES" | grep -qi "Success"; then
-        INSTALLED=1
-        break
-      fi
+      cat "$TMP_APK" | cmd package install-write -S "$(stat -c%s "$TMP_APK")" "$SID" base.apk
+      cmd package install-commit "$SID"
+    else
+      pm install -r -t --user 0 "$TMP_APK"
     fi
-
-    # Method 2: Direct cmd package install from /data/local/tmp
-    RES2=$(pm install -r -t --user 0 "$TMP_APK" 2>&1)
-    echo "Direct pm install result: $RES2" >> "$LOG"
-    if echo "$RES2" | grep -qi "Success"; then
-      INSTALLED=1
-      break
-    fi
-
-    sleep 5
-  done
-
-  rm -f "$TMP_APK"
-
-  if [ "$INSTALLED" = "1" ]; then
-    echo "[SUCCESS] Manager APK installed cleanly!" >> "$LOG"
-    rm -f "$APK" "$0"
-  else
-    echo "[WARN] Auto-install blocked by ROM; APK kept at /sdcard/Download/ and $APK" >> "$LOG"
+    rm -f "$TMP_APK" "$APK"
   fi
+  rm -f "$0"
 ) &
 SCRIPT
     chmod 755 /data/adb/service.d/99_aegis_manager_install.sh
