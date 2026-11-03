@@ -1,16 +1,13 @@
 <div align="center">
 
-<!-- Animated Neon Header Banner -->
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f0c29,50:302b63,100:ff0055&height=230&section=header&text=AEGIS-ROOT&fontSize=65&fontColor=ffffff&animation=twinkling&fontAlignY=35&desc=%E2%9A%A1%20Universal%20GKI%202.0+%20Root%20%26%20SuSFS%20LKM%20Auto-Patcher%20%E2%9A%A1&descAlignY=60&descSize=18" width="100%" alt="AegisRoot Banner"/>
 
-<!-- Animated Typing SVG -->
 <a href="https://github.com/Raju-yeager/SukiSU-Ultra-Flasher">
   <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=20&duration=3000&pause=800&color=FF0055&center=true&vCenter=true&width=780&lines=Universal+Recovery-Flashable+Root+Installer;SukiSU-Ultra+%2B+KernelSU-Next+%2B+SuSFS+LKM;AVC+Log+Spoofing+%26+SELinux+Stealth+Out-of-the-Box;Auto-Patches+init_boot+%2F+boot+%26+Auto-Installs+Spoofed+APK;Maintained+by+%40Raju_D_yeager" alt="Typing SVG" />
 </a>
 
 <br/>
 
-<!-- Neon Shields Badges -->
 [![Maintainer](https://img.shields.io/badge/Maintainer-%40Raju__D__yeager-ff0055?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Raju-yeager)
 [![Telegram Channel](https://img.shields.io/badge/Telegram-Izanami__kernel%20(peridot)-0088cc?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/Evil_twin_peridot)
 [![SukiSU Builder](https://img.shields.io/github/actions/workflow/status/Raju-yeager/SukiSU-Ultra-Flasher/build-flasher.yml?style=for-the-badge&logo=linux&label=SukiSU-Ultra%20CI&color=7928CA)](https://github.com/Raju-yeager/SukiSU-Ultra-Flasher/actions)
@@ -81,15 +78,22 @@ ENABLE_SUSFS_LKM=1
 ENABLE_SUSFS_EARLY_LOAD=1
 ENABLE_AVC_SPOOF=1
 ENABLE_HIDE_SELINUX=1
-(Set any option to 0 to disable automatic boot-time activation).
-​🌐 Community & Credits
-​👤 Maintainer & Developer: @Raju_D_yeager
-​📢 Official Telegram Channel: Izanami_kernel (peridot) — @Evil_twin_peridot
-​🙏 Upstream Credits:
-​SukiSU-Ultra Team
-​KernelSU-Next (rifsxd)
-​SuSFS for LKM (simonpunk / inforcqb)
-​Magisk (topjohnwu)
-​<div align="center">
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f0c29,50:302b63,100:ff0055&height=110&section=footer" width="100%"/>
+```
+
+*(Set any option to `0` to disable automatic boot-time activation).*
+
+---
+
+## 🌐 Community & Credits
+
+* 👤 **Maintainer & Developer:** [**@Raju_D_yeager**](https://github.com/Raju-yeager)
+* 📢 **Official Telegram Channel:** [**Izanami_kernel (peridot) — @Evil_twin_peridot**](https://t.me/Evil_twin_peridot)
+* 🙏 **Upstream Credits:**
+  * [SukiSU-Ultra Team](https://github.com/SukiSU-Ultra/SukiSU-Ultra)
+  * [KernelSU-Next (`rifsxd`)](https://github.com/KernelSU-Next/KernelSU-Next)
+  * [SuSFS for LKM (`simonpunk` / `inforcqb`)](https://github.com/inforcqb/susfs4ksu-for-lkm)
+  * [Magisk (`topjohnwu`)](https://github.com/topjohnwu/Magisk)
+
+<div align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f0c29,50:302b63,100:ff0055&height=110&section=footer" width="100%"/>
 </div>
