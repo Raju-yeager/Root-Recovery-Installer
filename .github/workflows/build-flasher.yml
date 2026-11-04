@@ -2,13 +2,14 @@ name: SukiSU-Ultra + SuSFS Builder
 
 on:
   schedule:
+    # Checks once a day at 12:00 UTC
     - cron: '0 12 * * *'
   workflow_dispatch:
     inputs:
       force_build:
         description: 'Force rebuild even if version already exists'
         required: false
-        default: 'true'
+        default: 'false'
 
 permissions:
   contents: write
@@ -21,49 +22,57 @@ jobs:
       TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
     steps:
-      - name: Check for Major/Official SukiSU-Ultra Release
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if SukiSU-Ultra Version Changed
         id: check
         run: |
-          SUKI_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
-          SUKI_TAG=$(echo "$SUKI_JSON" | jq -r .tag_name)
-          IS_PRERELEASE=$(echo "$SUKI_JSON" | jq -r .prerelease)
+          SUKI_JSON=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
+          SUKI_TAG=$(echo "$SUKI_JSON" | jq -r '.tag_name // empty')
+          IS_PRERELEASE=$(echo "$SUKI_JSON" | jq -r '.prerelease // false')
           CORE_VER=$(echo "$SUKI_TAG" | grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+' || true)
 
           if [ -z "$CORE_VER" ] || [ "$IS_PRERELEASE" = "true" ]; then
+            echo "Invalid or pre-release tag ($SUKI_TAG). Skipping."
             echo "should_build=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          SUSFS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
+          LAST_VER=""
+          [ -f .suki_version ] && LAST_VER=$(cat .suki_version | tr -d '[:space:]')
+          RELEASE_TAG="sukisu-${CORE_VER}"
+
+          TAG_EXISTS=$(git ls-remote --tags origin "refs/tags/${RELEASE_TAG}")
+
+          echo "Upstream SukiSU: $CORE_VER | Last Built: $LAST_VER"
+
+          if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
+            echo "Manual force_build=true requested."
+          elif [ "$CORE_VER" = "$LAST_VER" ] || [ -n "$TAG_EXISTS" ]; then
+            echo "SukiSU-Ultra $CORE_VER is already built and uploaded. Skipping!"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          SUSFS_JSON=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
           SUSFS_TAG=$(echo "$SUSFS_JSON" | jq -r .tag_name)
 
-          RELEASE_TAG="sukisu-${CORE_VER}"
           echo "SUKI_TAG=$SUKI_TAG" >> $GITHUB_ENV
           echo "CORE_VER=$CORE_VER" >> $GITHUB_ENV
           echo "SUSFS_TAG=$SUSFS_TAG" >> $GITHUB_ENV
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
-
-          STATUS=$(curl -sL -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${RELEASE_TAG}")
-
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$STATUS" = "200" ]; then
-            echo "should_build=false" >> $GITHUB_OUTPUT
-          else
-            echo "should_build=true" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Checkout Template
-        if: steps.check.outputs.should_build == 'true'
-        uses: actions/checkout@v4
+          echo "should_build=true" >> $GITHUB_OUTPUT
 
       - name: Fetch SukiSU-Ultra, Spoofed Manager APK, SuSFS LKM & magiskboot
         if: steps.check.outputs.should_build == 'true'
         run: |
-          SUKI_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
+          SUKI_JSON=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
           KSUD_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select(.name == "ksud-aarch64-linux-android") | .browser_download_url')
           curl -fL "$KSUD_URL" -o ksud && chmod +x ksud
 
-          # Prefer Spoofed APK (case-insensitive)
           APK_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select((.name | ascii_downcase | contains("spoof")) and (.name | endswith(".apk"))) | .browser_download_url' | head -n 1)
           if [ -z "$APK_URL" ] || [ "$APK_URL" = "null" ]; then
             APK_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
@@ -75,13 +84,13 @@ jobs:
             [ "$KO_URL" != "null" ] && [ -n "$KO_URL" ] && curl -fL "$KO_URL" -o "${KMI}_kernelsu.ko"
           done
 
-          SUSFS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
+          SUSFS_JSON=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
           for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
             SUS_URL=$(echo "$SUSFS_JSON" | jq -r ".assets[] | select(.name | contains(\"${KMI}\") and endswith(\".ko\")) | .browser_download_url" | head -n 1)
             [ "$SUS_URL" != "null" ] && [ -n "$SUS_URL" ] && curl -fL "$SUS_URL" -o "susfs_guard_lkm-${KMI}.ko"
           done
 
-          MAGISK_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
+          MAGISK_URL=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
           curl -fL "$MAGISK_URL" -o magisk.apk
           unzip -p magisk.apk lib/arm64-v8a/libmagiskboot.so > magiskboot
           chmod +x magiskboot && rm -f magisk.apk
@@ -99,15 +108,23 @@ jobs:
 
           cat << TXT > source.txt
           AegisRoot Universal Root Installer — By @Raju_D_yeager
-          SukiSU-Ultra: ${{ env.SUKI_TAG }} (https://github.com/SukiSU-Ultra/SukiSU-Ultra)
-          SuSFS-LKM: ${{ env.SUSFS_TAG }} (https://github.com/inforcqb/susfs4ksu-for-lkm)
-          Defaults: AVC_SPOOF=ON | HIDE_SELINUX=ON | SUSFS_EXPOSE_PROC=ON | SPOOFED_APK=ON
+          SukiSU-Ultra: ${{ env.SUKI_TAG }}
+          SuSFS-LKM: ${{ env.SUSFS_TAG }}
           Build Date: $(date -u +"%Y-%m-%d %H:%M UTC")
           TXT
 
           ZIP_NAME="SukiSU_Ultra_${{ env.CORE_VER }}_SuSFS_${{ env.SUSFS_TAG }}_Universal_Installer.zip"
           zip -r9 "$ZIP_NAME" META-INF config.env source.txt ksud magiskboot manager.apk *.ko
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Save New SukiSU Version State
+        if: steps.check.outputs.should_build == 'true'
+        run: |
+          echo "${{ env.CORE_VER }}" > .suki_version
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .suki_version
+          git diff --staged --quiet || (git commit -m "chore(release): record SukiSU-Ultra ${{ env.CORE_VER }}" && git push origin main)
 
       - name: Publish GitHub Release
         if: steps.check.outputs.should_build == 'true'
