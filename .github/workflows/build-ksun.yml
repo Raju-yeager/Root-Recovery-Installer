@@ -1,8 +1,7 @@
-name: KernelSU-Next + SuSFS Builder
+name: KernelSU-Next Builder
 
 on:
   schedule:
-    # Checks once a day at 12:30 UTC
     - cron: '30 12 * * *'
   workflow_dispatch:
     inputs:
@@ -36,7 +35,6 @@ jobs:
           CORE_VER=$(echo "$KSUN_TAG" | grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+' || true)
 
           if [ -z "$CORE_VER" ] || [ "$IS_PRERELEASE" = "true" ]; then
-            echo "Invalid or pre-release tag ($KSUN_TAG). Skipping."
             echo "should_build=false" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -45,28 +43,18 @@ jobs:
           [ -f .ksun_version ] && LAST_VER=$(cat .ksun_version | tr -d '[:space:]')
           RELEASE_TAG="ksun-${CORE_VER}"
 
-          TAG_EXISTS=$(git ls-remote --tags origin "refs/tags/${RELEASE_TAG}")
-
-          echo "Upstream KSUN: $CORE_VER | Last Built: $LAST_VER"
-
-          if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
-            echo "Manual force_build=true requested."
-          elif [ "$CORE_VER" = "$LAST_VER" ] || [ -n "$TAG_EXISTS" ]; then
-            echo "KernelSU-Next $CORE_VER is already built and uploaded. Skipping!"
+          if [ "${{ github.event.inputs.force_build }}" != "true" ] && [ "$CORE_VER" = "$LAST_VER" ]; then
+            echo "KernelSU-Next $CORE_VER already built. Skipping!"
             echo "should_build=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          SUSFS_JSON=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
-          SUSFS_TAG=$(echo "$SUSFS_JSON" | jq -r .tag_name)
-
           echo "KSUN_TAG=$KSUN_TAG" >> $GITHUB_ENV
           echo "CORE_VER=$CORE_VER" >> $GITHUB_ENV
-          echo "SUSFS_TAG=$SUSFS_TAG" >> $GITHUB_ENV
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
           echo "should_build=true" >> $GITHUB_OUTPUT
 
-      - name: Fetch KernelSU-Next LKM, Spoofed Manager APK, SuSFS LKM & magiskboot
+      - name: Fetch KernelSU-Next LKM, Spoofed APK & magiskboot
         if: steps.check.outputs.should_build == 'true'
         run: |
           KSUN_JSON=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/KernelSU-Next/KernelSU-Next/releases/latest)
@@ -84,37 +72,16 @@ jobs:
             [ "$KO_URL" != "null" ] && [ -n "$KO_URL" ] && curl -fL "$KO_URL" -o "${KMI}_kernelsu.ko"
           done
 
-          SUSFS_JSON=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/inforcqb/susfs4ksu-for-lkm/releases/latest)
-          for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
-            SUS_URL=$(echo "$SUSFS_JSON" | jq -r ".assets[] | select(.name | contains(\"${KMI}\") and endswith(\".ko\")) | .browser_download_url" | head -n 1)
-            [ "$SUS_URL" != "null" ] && [ -n "$SUS_URL" ] && curl -fL "$SUS_URL" -o "susfs_guard_lkm-${KMI}.ko"
-          done
-
           MAGISK_URL=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
           curl -fL "$MAGISK_URL" -o magisk.apk
           unzip -p magisk.apk lib/arm64-v8a/libmagiskboot.so > magiskboot
           chmod +x magiskboot && rm -f magisk.apk
 
-      - name: Package KernelSU-Next + SuSFS ZIP
+      - name: Package KernelSU-Next ZIP
         if: steps.check.outputs.should_build == 'true'
         run: |
-          cat << 'CONF' > config.env
-          ROOT_VARIANT="KernelSU-Next"
-          ENABLE_SUSFS_LKM=1
-          ENABLE_SUSFS_EARLY_LOAD=1
-          ENABLE_AVC_SPOOF=1
-          ENABLE_HIDE_SELINUX=1
-          CONF
-
-          cat << TXT > source.txt
-          AegisRoot Universal Root Installer — By @Raju_D_yeager
-          KernelSU-Next: ${{ env.KSUN_TAG }}
-          SuSFS-LKM: ${{ env.SUSFS_TAG }}
-          Build Date: $(date -u +"%Y-%m-%d %H:%M UTC")
-          TXT
-
-          ZIP_NAME="KernelSU_Next_${{ env.CORE_VER }}_SuSFS_${{ env.SUSFS_TAG }}_Universal_Installer.zip"
-          zip -r9 "$ZIP_NAME" META-INF config.env source.txt ksud magiskboot manager.apk *.ko
+          ZIP_NAME="KernelSU_Next_${{ env.CORE_VER }}_Universal_Installer.zip"
+          zip -r9 "$ZIP_NAME" META-INF ksud magiskboot manager.apk *.ko
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Save New KSUN Version State
@@ -131,22 +98,20 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "${{ env.RELEASE_TAG }}"
-          name: "⚡ KernelSU-Next ${{ env.CORE_VER }} + SuSFS (${{ env.SUSFS_TAG }}) Universal Installer"
+          name: "⚡ KernelSU-Next ${{ env.CORE_VER }} Universal Installer"
           files: ${{ env.ZIP_NAME }}
           generate_release_notes: true
 
       - name: Upload to Telegram Channel (@Evil_twin_peridot)
         if: steps.check.outputs.should_build == 'true'
         run: |
-          CAPTION="⚡ <b>AEGIS-ROOT : KernelSU-Next + SuSFS LKM Installer</b>
+          CAPTION="⚡ <b>AEGIS-ROOT : KernelSU-Next Universal Installer</b>
           👤 <b>Maintainer:</b> @Raju_D_yeager
 
           🔹 <b>KernelSU-Next:</b> <code>${{ env.CORE_VER }}</code> (Spoofed APK Bundled)
-          🔹 <b>SuSFS LKM:</b> <code>${{ env.SUSFS_TAG }}</code>
           🔹 <b>Universal KMIs:</b> <code>A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18</code>
-          🔹 <b>Pre-Enabled:</b> <code>AVC Spoofing | Hide SELinux | SuSFS Early Load</code>
 
-          📦 <i>Universal GKI 2.0+ Root Flasher for Any Kernel/Device (Auto-patches init_boot/boot & auto-installs Spoofed Manager APK)</i>"
+          📦 <i>Clean Universal GKI 2.0+ Root Flasher (Auto-patches init_boot/boot & auto-installs Spoofed Manager APK)</i>"
 
           RESP=$(curl -s \
             --form-string "chat_id=${TG_CHAT_ID}" \

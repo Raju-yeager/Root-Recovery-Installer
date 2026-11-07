@@ -1,18 +1,12 @@
 #!/system/bin/sh
 # ******************************************************
-# Description: AegisRoot Universal SukiSU / KSUN + SuSFS Installer
+# Description: AegisRoot Universal SukiSU / KSUN Installer
 # Base Script Credit: OrangeFox Team, @invisibazinga, @Khargosxh18
 # Modified & Maintained By: @Raju_D_yeager
 # ******************************************************
 
-MOD_DATE="20261103"
-TARGET="KernelSU_Next"
-TWRP_INSTALLER_DEBUG_MODE=0
-
-if [ "$TWRP_INSTALLER_DEBUG_MODE" = "1" ]; then
-    set -o xtrace
-fi
-
+MOD_DATE="20261107"
+TARGET="SukiSU-Ultra"
 SCREEN=/proc/self/fd/$2
 ZIPFILE="$3"
 
@@ -28,7 +22,6 @@ $BOOTMODE || ps -A 2>/dev/null | grep zygote | grep -v grep >/dev/null && BOOTMO
 
 $BOOTMODE && TMP_DIR=/dev/tmp || TMP_DIR=/tmp
 mkdir -p "$TMP_DIR"
-
 EX_DIR="$TMP_DIR/twrp_ksu_installer"
 
 ui_print() {
@@ -54,6 +47,14 @@ abort() {
     exit 1
 }
 
+get_target() {
+    if echo "$ZIPFILE" | grep -qi "Next"; then
+        TARGET="KernelSU-Next"
+    else
+        TARGET="SukiSU-Ultra"
+    fi
+}
+
 Unzip_Installer_Package() {
     mkdir -p "$TMP_DIR"
     cd "$TMP_DIR" || abort "Failed to access temp dir"
@@ -62,54 +63,36 @@ Unzip_Installer_Package() {
     cd "$EX_DIR" || abort "Failed to access extract dir"
     unzip -o "$ZIPFILE" >/dev/null 2>&1 || abort "Failed to extract installer zip"
     chmod -R 0755 "$EX_DIR" 2>/dev/null
-    [ -f "$EX_DIR/config.env" ] && . "$EX_DIR/config.env"
-    [ -n "$ROOT_VARIANT" ] && TARGET="$ROOT_VARIANT"
 }
 
 setup_magiskboot() {
     ui_print "- Setting up magiskboot..."
-
     if [ -f /system/bin/magiskboot ] && [ -x /system/bin/magiskboot ]; then
         MAGISKBOOT_BIN="/system/bin/magiskboot"
         export PATH="/system/bin:$PATH"
-        ui_print "- magiskboot found in /system/bin"
         return
     fi
 
     if [ -f "$EX_DIR/magiskboot" ]; then
         cp -f "$EX_DIR/magiskboot" /sbin/magiskboot 2>/dev/null
         chmod 0755 /sbin/magiskboot 2>/dev/null
-
         if [ -f /sbin/magiskboot ] && [ -x /sbin/magiskboot ]; then
             MAGISKBOOT_BIN="/sbin/magiskboot"
             export PATH="/sbin:$PATH"
-            ui_print "- Copied magiskboot to /sbin"
         else
             cp -f "$EX_DIR/magiskboot" "$TMP_DIR/magiskboot"
             chmod 0755 "$TMP_DIR/magiskboot"
-
-            if [ -f "$TMP_DIR/magiskboot" ] && [ -x "$TMP_DIR/magiskboot" ]; then
-                export PATH="$TMP_DIR:$EX_DIR:$PATH"
-                MAGISKBOOT_BIN="$TMP_DIR/magiskboot"
-                ui_print "- Configured magiskboot in $TMP_DIR"
-            else
-                abort "Failed to copy magiskboot to an executable path."
-            fi
+            export PATH="$TMP_DIR:$EX_DIR:$PATH"
+            MAGISKBOOT_BIN="$TMP_DIR/magiskboot"
         fi
     else
-        abort "magiskboot not found in the root of the ZIP package!"
+        abort "magiskboot not found in ZIP!"
     fi
 }
 
 find_ksud() {
     local p
-    # Prioritize bundled ksud inside ZIP so version always matches bundled LKM
-    for p in \
-        "$EX_DIR/ksud" \
-        /sbin/ksud \
-        /tmp/ksud \
-        /system/bin/ksud
-    do
+    for p in "$EX_DIR/ksud" /sbin/ksud /tmp/ksud /system/bin/ksud; do
         if [ -f "$p" ]; then
             chmod 0755 "$p" 2>/dev/null
             cp -f "$p" /sbin/ksud 2>/dev/null
@@ -118,13 +101,6 @@ find_ksud() {
             return 0
         fi
     done
-
-    p=$(command -v ksud 2>/dev/null)
-    if [ -n "$p" ] && [ -f "$p" ]; then
-        chmod 0755 "$p" 2>/dev/null
-        echo "$p"
-        return 0
-    fi
     return 1
 }
 
@@ -132,14 +108,6 @@ find_kernel_kmi() {
     local k_kmi
     local kernel_ver
     local kernel_ver_num
-    local an_ver
-    local has_ver
-    local android_version
-    local tmp
-    local tmp2
-    local supported_kmi
-    local matches=""
-    local kmi
 
     if [ -n "$KSUD_BIN" ]; then
         k_kmi=$("$KSUD_BIN" boot-info current-kmi 2>/dev/null)
@@ -149,101 +117,36 @@ find_kernel_kmi() {
         fi
     fi
 
-    k_kmi=$(getprop ro.orangefox.spoof.kernelsu.current-kmi)
-    if [ -n "$k_kmi" ]; then
-        echo "$k_kmi"
-        return
-    fi
-
     kernel_ver=$(uname -r 2>/dev/null)
     kernel_ver_num=$(echo "$kernel_ver" | cut -d. -f1-2)
 
     case "$kernel_ver_num" in
-        5.*|4.*|3.*)
-            echo "unsupported_legacy"
-            return
-            ;;
-    esac
-
-    an_ver=$(echo "${kernel_ver#*android}" | sed 's/-.*//')
-    has_ver=$(echo "$kernel_ver" | grep "android")
-    android_version="android$an_ver"
-
-    if [ -n "$KSUD_BIN" ]; then
-        supported_kmi=$("$KSUD_BIN" boot-info supported-kmis 2>/dev/null)
-        if [ -z "$supported_kmi" ]; then
-            supported_kmi=$("$KSUD_BIN" boot-info supported-kmi 2>/dev/null)
-        fi
-    fi
-
-    if [ -z "$has_ver" ]; then
-        android_version="$kernel_ver_num"
-    else
-        kernel_ver_num=$(echo "${kernel_ver_num%-*}")
-        kernel_ver_num=$(echo "${kernel_ver_num#*-}")
-    fi
-
-    for kmi in $supported_kmi; do
-        tmp=$(echo "$kmi" | grep "$kernel_ver_num$")
-        tmp2=$(echo "$kmi" | grep "$android_version")
-        if [ -n "$tmp" ] && [ -n "$tmp2" ]; then
-            matches="$matches $kmi"
-        fi
-    done
-
-    set -- $matches
-    if [ "$#" -eq 1 ]; then
-        echo "$1"
-        return
-    fi
-
-    # Direct fallback mapping for custom kernel strings (e.g. 6.1.174-Vibranium-V18+)
-    case "$kernel_ver_num" in
+        5.*|4.*|3.*) echo "unsupported_legacy" ; return ;;
         6.1)  echo "android14-6.1"  ; return ;;
         6.6)  echo "android15-6.6"  ; return ;;
         6.12) echo "android16-6.12" ; return ;;
         6.18) echo "android17-6.18" ; return ;;
     esac
-
     echo "unknown"
 }
 
-get_target() {
-    if echo "$ZIPFILE" | grep -qi "Suki"; then
-        TARGET="SukiSU-Ultra"
-    elif echo "$ZIPFILE" | grep -qi "Next"; then
-        TARGET="KernelSU-Next"
-    fi
-}
-
 CheckRequirements() {
-    ui_print "- Checking for ksud..."
     KSUD_BIN=$(find_ksud)
-    if [ -z "$KSUD_BIN" ] || [ ! -f "$KSUD_BIN" ]; then
-        abort "'ksud' binary not found in installer package!"
-    fi
-    chmod 0755 "$KSUD_BIN" 2>/dev/null
+    [ -n "$KSUD_BIN" ] && [ -f "$KSUD_BIN" ] || abort "ksud binary not found!"
 
-    ui_print "- Checking kernel version..."
-    local KERNEL_VERSION
-    KERNEL_VERSION=$(uname -r 2>/dev/null)
+    local KERNEL_VERSION=$(uname -r 2>/dev/null)
     SUPPORTED_KERNEL=$(find_kernel_kmi)
 
     if [ "$SUPPORTED_KERNEL" = "unsupported_legacy" ]; then
         abort "Kernel $KERNEL_VERSION is not supported (requires Kernel 6.1+)."
     fi
 
-    # Match strictly *_kernelsu.ko so susfs_guard_lkm-*.ko is not picked as main LKM
-    FNAME=$(ls "$EX_DIR"/*"${SUPPORTED_KERNEL}_kernelsu.ko" 2>/dev/null | head -n 1)
-    [ -z "$FNAME" ] && FNAME=$(ls "$EX_DIR"/*"$SUPPORTED_KERNEL"*kernelsu*.ko 2>/dev/null | head -n 1)
+    FNAME=$(ls "$EX_DIR"/*"${SUPPORTED_KERNEL}"*.ko 2>/dev/null | head -n 1)
+    [ -n "$FNAME" ] && [ -e "$FNAME" ] || abort "Missing LKM for $KERNEL_VERSION ($SUPPORTED_KERNEL)"
 
-    if [ -z "$FNAME" ] || [ ! -e "$FNAME" ]; then
-        abort "Incompatible kernel ($KERNEL_VERSION). Detected KMI: $SUPPORTED_KERNEL"
-    else
-        ui_print "- Kernel OK : $KERNEL_VERSION"
-        ui_print "- Target KMI: $SUPPORTED_KERNEL"
-        ui_print "- Found LKM : $(basename "$FNAME")"
-    fi
+    ui_print "- Kernel OK : $KERNEL_VERSION"
+    ui_print "- Target KMI: $SUPPORTED_KERNEL"
+    ui_print "- Module    : $(basename "$FNAME")"
 
     if [ -e /dev/block/bootdevice/by-name/init_boot_a ] || \
        [ -e /dev/block/by-name/init_boot_a ] || \
@@ -258,20 +161,17 @@ CheckRequirements() {
 do_install() {
     ui_print "- Patching and flashing $PART with $TARGET..."
 
-    mkdir -p /data/local/tmp 2>/dev/null
     mkdir -p /tmp 2>/dev/null
-    export HOME="$TMP_DIR"
+    export HOME="/tmp"
+    export TMPDIR="/tmp"
 
     HELP_OUT=$("$KSUD_BIN" boot-patch --help 2>&1)
     KMI_ARG=""
-    if echo "$HELP_OUT" | grep -q -- "--kmi"; then
-        KMI_ARG="--kmi $SUPPORTED_KERNEL"
-    fi
+    echo "$HELP_OUT" | grep -q -- "--kmi" && KMI_ARG="--kmi $SUPPORTED_KERNEL"
 
-    # Method 1: @Khargosxh18 native ksud --flash logic (auto-locates & flashes partition)
     "$KSUD_BIN" boot-patch --module "$FNAME" $KMI_ARG --flash >&2
     if [ $? -ne 0 ]; then
-        ui_print "- Native --flash returned error, using block dd fallback..."
+        ui_print "- Native --flash fallback to block dd..."
         SLOT=$(getprop ro.boot.slot_suffix)
         [ -z "$SLOT" ] && SLOT=$(grep -o 'androidboot.slot_suffix=_[ab]' /proc/cmdline | cut -d= -f2)
 
@@ -287,157 +187,83 @@ do_install() {
         "$KSUD_BIN" boot-patch --boot "$EX_DIR/boot.img" --module "$FNAME" $KMI_ARG --out "$EX_DIR" >&2 || abort "ksud boot-patch failed!"
 
         PATCHED_IMG=$(find "$EX_DIR" -maxdepth 1 -type f -name "*patched*.img" | head -n 1)
-        [ -f "$PATCHED_IMG" ] || abort "Patched image not found in $EX_DIR"
+        [ -f "$PATCHED_IMG" ] || abort "Patched image not found!"
 
-        ui_print "- Writing $(basename "$PATCHED_IMG") to $TARGET_BLK..."
-        dd if="$PATCHED_IMG" of="$TARGET_BLK" bs=4096 2>/dev/null || abort "Failed to flash patched image!"
+        dd if="$PATCHED_IMG" of="$TARGET_BLK" bs=4096 2>/dev/null || abort "Failed to write patched image!"
         sync
     fi
-
     ui_print "- $TARGET ramdisk patch complete!"
 }
 
-stage_addons() {
-    ui_print "- Mounting /data to configure SuSFS & stealth flags..."
+stage_apk_only() {
+    [ -f "$EX_DIR/manager.apk" ] || return 0
     mount /data 2>/dev/null
     if [ ! -d "/data/adb" ]; then
-        ui_print "! /data is unmounted/encrypted; skipping /data/adb staging."
-        return
+        ui_print "! /data is encrypted; install Manager APK manually after boot."
+        return 0
     fi
 
-    mkdir -p /data/adb/ksu/bin /data/adb/post-fs-data.d /data/adb/service.d /data/adb/boot-completed.d /data/adb/susfs4ksu
-    cp -f "$KSUD_BIN" /data/adb/ksud
-    cp -f "$KSUD_BIN" /data/adb/ksu/bin/ksud
-    chmod 0755 /data/adb/ksud /data/adb/ksu/bin/ksud
+    ui_print "- Staging $TARGET Spoofed Manager APK..."
+    mkdir -p /data/adb/service.d
+    chmod 0755 /data/adb/service.d
 
-    # 1. Stage SuSFS LKM
-    if [ "${ENABLE_SUSFS_LKM:-1}" = "1" ] && [ -f "$EX_DIR/susfs_guard_lkm-${SUPPORTED_KERNEL}.ko" ]; then
-        ui_print "- Staging SuSFS LKM ($SUPPORTED_KERNEL)..."
-        cp -f "$EX_DIR/susfs_guard_lkm-${SUPPORTED_KERNEL}.ko" /data/adb/susfs4ksu/susfs_guard_lkm.ko
-        chmod 0644 /data/adb/susfs4ksu/susfs_guard_lkm.ko
+    cp -f "$EX_DIR/manager.apk" /data/adb/aegis_manager.apk
+    chmod 0644 /data/adb/aegis_manager.apk
+    if [ -d "/data/media/0/Download" ]; then
+        cp -f "$EX_DIR/manager.apk" "/data/media/0/Download/${TARGET}_Spoofed_Manager.apk"
+        chmod 0664 "/data/media/0/Download/${TARGET}_Spoofed_Manager.apk"
     fi
 
-    # 2. Configure SuSFS Early Load + AVC Spoofing + Hide SELinux
-    cat << 'SCRIPT' > /data/adb/post-fs-data.d/00_sukisu_stealth.sh
+    cat << 'SCRIPT' > /data/adb/service.d/99_aegis_apk_install.sh
 #!/system/bin/sh
-MODDIR=/data/adb/susfs4ksu
-if [ -f "$MODDIR/susfs_guard_lkm.ko" ] && [ ! -e "/proc/susfs_version" ]; then
-  /data/adb/ksud insmod "$MODDIR/susfs_guard_lkm.ko" expose_proc=1 2>/dev/null || insmod "$MODDIR/susfs_guard_lkm.ko" expose_proc=1 2>/dev/null
-fi
-SCRIPT
+APK="/data/adb/aegis_manager.apk"
+[ -f "$APK" ] || { rm -f "$0"; exit 0; }
 
-    if [ "${ENABLE_AVC_SPOOF:-1}" = "1" ]; then
-        ui_print "- Enabling AVC Log Spoofing..."
-        cat << 'SCRIPT' >> /data/adb/post-fs-data.d/00_sukisu_stealth.sh
-/data/adb/ksud feature set avc_spoof 1 2>/dev/null || echo 1 > /sys/module/kernelsu/parameters/enable_avc_spoof 2>/dev/null
-touch /data/adb/ksu/.avc_spoof_enabled
-SCRIPT
-    fi
-
-    if [ "${ENABLE_HIDE_SELINUX:-1}" = "1" ]; then
-        ui_print "- Enabling Hide SELinux Modifications..."
-        cat << 'SCRIPT' >> /data/adb/post-fs-data.d/00_sukisu_stealth.sh
-/data/adb/ksud feature set hide_selinux 1 2>/dev/null || echo 1 > /sys/module/kernelsu/parameters/hide_selinux 2>/dev/null
-touch /data/adb/ksu/.hide_selinux_enabled
-SCRIPT
-    fi
-
-    cat << 'SCRIPT' >> /data/adb/post-fs-data.d/00_sukisu_stealth.sh
-/data/adb/ksud feature save 2>/dev/null
-SCRIPT
-    chmod 0755 /data/adb/post-fs-data.d/00_sukisu_stealth.sh
-
-    # 3. Stage Spoofed Manager APK + Detached Post-Unlock Installer
-    if [ -f "$EX_DIR/manager.apk" ]; then
-        ui_print "- Staging $TARGET Spoofed Manager APK..."
-        cp -f "$EX_DIR/manager.apk" /data/adb/ksu/manager.apk
-        chmod 0644 /data/adb/ksu/manager.apk
-        if [ -d "/data/media/0/Download" ]; then
-            cp -f "$EX_DIR/manager.apk" "/data/media/0/Download/${TARGET}_Spoofed_Manager.apk"
-            chmod 0664 "/data/media/0/Download/${TARGET}_Spoofed_Manager.apk"
-        fi
-
-        cat << 'WORKER' > /data/adb/ksu/apk_worker.sh
-#!/system/bin/sh
-LOG="/data/adb/ksu/apk_install.log"
-APK="/data/adb/ksu/manager.apk"
-echo "[$(date)] Starting APK worker..." > "$LOG"
-
-COUNT=0
-until [ "$(getprop sys.boot_completed)" = "1" ] && [ -d "/sdcard/Android" ]; do
-  sleep 3
-  COUNT=$((COUNT + 1))
-  [ "$COUNT" -ge 60 ] && break
-done
-sleep 6
-
-[ -f "$APK" ] || exit 0
-
-settings put global verifier_verify_adb_installs 0 2>/dev/null
-settings put global package_verifier_enable 0 2>/dev/null
-
-TMP_APK="/data/local/tmp/aegis_mgr.apk"
-cp -f "$APK" "$TMP_APK"
-chown 2000:2000 "$TMP_APK" 2>/dev/null
-chmod 0644 "$TMP_APK"
-SIZE=$(stat -c%s "$TMP_APK" 2>/dev/null || wc -c < "$TMP_APK")
-INSTALLED=0
-
-for TRY in 1 2 3 4 5 6; do
-  RES1=$(cat "$TMP_APK" | cmd package install -r -t -g --user 0 -S "$SIZE" 2>&1)
-  echo "Try $TRY (stream): $RES1" >> "$LOG"
-  if echo "$RES1" | grep -qi "Success"; then INSTALLED=1; break; fi
-
-  RES2=$(pm install -r -t -g --user 0 "$TMP_APK" 2>&1)
-  echo "Try $TRY (direct): $RES2" >> "$LOG"
-  if echo "$RES2" | grep -qi "Success"; then INSTALLED=1; break; fi
+(
+  COUNT=0
+  until [ "$(getprop sys.boot_completed)" = "1" ] && [ -d "/sdcard/Android" ]; do
+    sleep 3
+    COUNT=$((COUNT + 1))
+    [ "$COUNT" -ge 60 ] && exit 0
+  done
   sleep 5
-done
 
-rm -f "$TMP_APK"
-if [ "$INSTALLED" = "1" ]; then
-  rm -f "$APK" /data/adb/boot-completed.d/99_aegis_manager_install.sh /data/adb/service.d/99_aegis_manager_install.sh /data/adb/ksu/apk_worker.sh
-fi
-WORKER
-        chmod 0755 /data/adb/ksu/apk_worker.sh
-
-        cat << 'LAUNCHER' > /data/adb/boot-completed.d/99_aegis_manager_install.sh
-#!/system/bin/sh
-if [ -f /data/adb/ksu/apk_worker.sh ]; then
-  setsid /system/bin/sh /data/adb/ksu/apk_worker.sh </dev/null >/dev/null 2>&1 &
-fi
-exit 0
-LAUNCHER
-        chmod 0755 /data/adb/boot-completed.d/99_aegis_manager_install.sh
-        cp -f /data/adb/boot-completed.d/99_aegis_manager_install.sh /data/adb/service.d/99_aegis_manager_install.sh
-        chmod 0755 /data/adb/service.d/99_aegis_manager_install.sh
+  SIZE=$(stat -c%s "$APK" 2>/dev/null || wc -c < "$APK")
+  for TRY in 1 2 3 4; do
+    RES=$(cat "$APK" | cmd package install -r -t -g --user 0 -S "$SIZE" 2>&1)
+    if echo "$RES" | grep -qi "Success"; then
+      rm -f "$APK" "/data/adb/service.d/99_aegis_apk_install.sh"
+      exit 0
     fi
+    sleep 5
+  done
+) </dev/null >/dev/null 2>&1 &
+exit 0
+SCRIPT
+    chmod 0755 /data/adb/service.d/99_aegis_apk_install.sh
 }
 
 Main() {
     get_target
     Unzip_Installer_Package
 
-    ui_print "*******************************************"
-    ui_print "*** AegisRoot Universal Root Installer  ***"
-    ui_print "*** Target: $TARGET + SuSFS LKM         ***"
-    ui_print "*** Maintainer: @Raju_D_yeager          ***"
-    ui_print "*** Base Credits: OrangeFox & Khargosxh ***"
-    ui_print "*** Installer V: $MOD_DATE              ***"
-    ui_print "*******************************************"
-    ui_print " "
+    ui_print "==========================================="
+    ui_print " ⚡ AEGIS-ROOT : UNIVERSAL AUTO-PATCHER ⚡ "
+    ui_print "    Engine    : $TARGET                    "
+    ui_print "    Maintainer: @Raju_D_yeager             "
+    ui_print "    Version   : $MOD_DATE                  "
+    ui_print "==========================================="
 
-    if [ "$BOOTMODE" = "true" ]; then
-        abort "Running on Android is not supported. Flash from custom recovery."
-    fi
+    [ "$BOOTMODE" = "true" ] && abort "Flash from custom recovery only!"
 
     setup_magiskboot
     CheckRequirements
     do_install
-    stage_addons
-    ui_print "*******************************************"
-    ui_print "*** Installation Complete! Reboot Now.  ***"
-    ui_print "*******************************************"
+    stage_apk_only
+
+    ui_print "==========================================="
+    ui_print " ✅ Flashed Successfully! By @Raju_D_yeager"
+    ui_print "==========================================="
     cleanup
     exit 0
 }
