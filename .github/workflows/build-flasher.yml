@@ -29,7 +29,7 @@ jobs:
       - name: Check if SukiSU-Ultra Version Changed
         id: check
         run: |
-          SUKI_JSON=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
+          SUKI_JSON=$(gh api repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
           SUKI_TAG=$(echo "$SUKI_JSON" | jq -r '.tag_name // empty')
           IS_PRERELEASE=$(echo "$SUKI_JSON" | jq -r '.prerelease // false')
           CORE_VER=$(echo "$SUKI_TAG" | grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+' || true)
@@ -57,17 +57,19 @@ jobs:
       - name: Fetch SukiSU-Ultra LKM, ksud & SuSFS (NO APK, NO magiskboot)
         if: steps.check.outputs.should_build == 'true'
         run: |
-          SUKI_JSON=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
-          KSUD_URL=$(echo "$SUKI_JSON" | jq -r '.assets[] | select(.name == "ksud-aarch64-linux-android") | .browser_download_url')
-          curl -fL "$KSUD_URL" -o ksud && chmod +x ksud
+          # Use gh release download + curl retry to prevent GitHub CDN 504 Gateway Timeouts
+          gh release download "${{ env.SUKI_TAG }}" -R SukiSU-Ultra/SukiSU-Ultra -p "ksud-aarch64-linux-android" -O ksud --clobber
+          chmod +x ksud
 
           for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
-            KO_URL=$(echo "$SUKI_JSON" | jq -r ".assets[] | select(.name | endswith(\"${KMI}_kernelsu.ko\")) | .browser_download_url" | head -n 1)
-            [ "$KO_URL" != "null" ] && [ -n "$KO_URL" ] && curl -fL "$KO_URL" -o "${KMI}_kernelsu.ko"
+            gh release download "${{ env.SUKI_TAG }}" -R SukiSU-Ultra/SukiSU-Ultra -p "*${KMI}_kernelsu.ko" --clobber || true
+            FOUND_KO=$(ls *${KMI}_kernelsu.ko 2>/dev/null | head -n 1 || true)
+            if [ -n "$FOUND_KO" ] && [ "$FOUND_KO" != "${KMI}_kernelsu.ko" ]; then
+              mv -f "$FOUND_KO" "${KMI}_kernelsu.ko"
+            fi
           done
 
-          SUSFS_URL=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/sidex15/susfs4ksu-module/releases/latest | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n 1)
-          [ -n "$SUSFS_URL" ] && [ "$SUSFS_URL" != "null" ] && curl -fL "$SUSFS_URL" -o susfs4ksu.zip || true
+          gh release download -R sidex15/susfs4ksu-module -p "*.zip" -O susfs4ksu.zip --clobber || true
 
       - name: Package SukiSU-Ultra + SuSFS ZIP (No APK)
         if: steps.check.outputs.should_build == 'true'
@@ -106,7 +108,7 @@ jobs:
 
           📦 <i>Lean Universal GKI 2.0+ Root + SuSFS Flasher (No APK bloat)</i>"
 
-          RESP=$(curl -s \
+          RESP=$(curl -s --retry 3 \
             --form-string "chat_id=${TG_CHAT_ID}" \
             -F "document=@${{ env.ZIP_NAME }}" \
             --form-string "parse_mode=HTML" \
@@ -114,7 +116,7 @@ jobs:
             "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument")
 
           if [ "$(echo "$RESP" | jq -r .ok)" != "true" ]; then
-            curl -s \
+            curl -s --retry 3 \
               --form-string "chat_id=-1004367113991" \
               -F "document=@${{ env.ZIP_NAME }}" \
               --form-string "parse_mode=HTML" \
