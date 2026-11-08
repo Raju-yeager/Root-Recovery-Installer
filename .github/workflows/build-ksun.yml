@@ -54,37 +54,23 @@ jobs:
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
           echo "should_build=true" >> $GITHUB_OUTPUT
 
-      - name: Fetch KernelSU-Next LKM, SuSFS Module & magiskboot
+      - name: Fetch KernelSU-Next LKM & ksud Only (~3.5MB)
         if: steps.check.outputs.should_build == 'true'
         run: |
           KSUN_JSON=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/KernelSU-Next/KernelSU-Next/releases/latest)
           KSUD_URL=$(echo "$KSUN_JSON" | jq -r '.assets[] | select(.name == "ksud-aarch64-linux-android") | .browser_download_url')
           curl -fL "$KSUD_URL" -o ksud && chmod +x ksud
 
-          APK_URL=$(echo "$KSUN_JSON" | jq -r '.assets[] | select((.name | ascii_downcase | contains("spoof")) and (.name | endswith(".apk"))) | .browser_download_url' | head -n 1)
-          if [ -z "$APK_URL" ] || [ "$APK_URL" = "null" ]; then
-            APK_URL=$(echo "$KSUN_JSON" | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
-          fi
-          curl -fL "$APK_URL" -o manager.apk
-
           for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
             KO_URL=$(echo "$KSUN_JSON" | jq -r ".assets[] | select(.name | contains(\"${KMI}\") and endswith(\".ko\")) | .browser_download_url" | head -n 1)
             [ "$KO_URL" != "null" ] && [ -n "$KO_URL" ] && curl -fL "$KO_URL" -o "${KMI}_kernelsu.ko"
           done
 
-          SUSFS_URL=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/sidex15/susfs4ksu-module/releases/latest | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n 1)
-          [ -n "$SUSFS_URL" ] && [ "$SUSFS_URL" != "null" ] && curl -fL "$SUSFS_URL" -o susfs4ksu.zip || true
-
-          MAGISK_URL=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
-          curl -fL "$MAGISK_URL" -o magisk.apk
-          unzip -p magisk.apk lib/arm64-v8a/libmagiskboot.so > magiskboot
-          chmod +x magiskboot && rm -f magisk.apk
-
-      - name: Package KernelSU-Next ZIP
+      - name: Package Lean KernelSU-Next ZIP (~3.5MB)
         if: steps.check.outputs.should_build == 'true'
         run: |
-          ZIP_NAME="KernelSU_Next_${{ env.CORE_VER }}_SuSFS_Universal_Installer.zip"
-          zip -r9 "$ZIP_NAME" META-INF ksud magiskboot manager.apk *.ko susfs4ksu.zip 2>/dev/null || zip -r9 "$ZIP_NAME" META-INF ksud magiskboot manager.apk *.ko
+          ZIP_NAME="KernelSU_Next_${{ env.CORE_VER }}_A14+_Installer.zip"
+          zip -r9 "$ZIP_NAME" META-INF ksud *.ko
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Save New KSUN Version State
@@ -101,21 +87,20 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "${{ env.RELEASE_TAG }}"
-          name: "⚡ KernelSU-Next ${{ env.CORE_VER }} + SuSFS Universal Installer"
+          name: "⚡ KernelSU-Next ${{ env.CORE_VER }} A14+ Installer"
           files: ${{ env.ZIP_NAME }}
           generate_release_notes: true
 
       - name: Upload to Telegram Channel (@Evil_twin_peridot)
         if: steps.check.outputs.should_build == 'true'
         run: |
-          CAPTION="⚡ <b>AEGIS-ROOT : KernelSU-Next + SuSFS Universal Installer</b>
+          CAPTION="⚡ <b>AEGIS-ROOT : KernelSU-Next A14+ Installer</b>
           👤 <b>Maintainer:</b> @Raju_D_yeager
 
           🔹 <b>KernelSU-Next:</b> <code>${{ env.CORE_VER }}</code>
-          🔹 <b>Bundled Addons:</b> <code>SuSFS4KSU Module + Spoofed APK (in /Download)</code>
           🔹 <b>Universal KMIs:</b> <code>A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18</code>
 
-          📦 <i>Patches init_boot/boot, syncs ksud + Zygisk Next dir, and stages SuSFS4KSU module</i>"
+          📦 <i>Ultra-lean (~3.5MB) pure ramdisk patcher — zero /data modifications</i>"
 
           RESP=$(curl -s \
             --form-string "chat_id=${TG_CHAT_ID}" \

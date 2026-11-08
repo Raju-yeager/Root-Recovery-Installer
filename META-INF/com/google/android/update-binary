@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # ******************************************************
-# Description: AegisRoot Universal SukiSU / KSUN + SuSFS Installer
+# Description: AegisRoot Pure Universal SukiSU / KSUN Installer
 # Base Script Credit: OrangeFox Team, @invisibazinga, @Khargosxh18
 # Modified & Maintained By: @Raju_D_yeager
 # ******************************************************
@@ -13,7 +13,6 @@ ZIPFILE="$3"
 FNAME=""
 PART=""
 KSUD_BIN=""
-MAGISKBOOT_BIN=""
 SUPPORTED_KERNEL=""
 
 BOOTMODE=false
@@ -66,27 +65,18 @@ Unzip_Installer_Package() {
 }
 
 setup_magiskboot() {
-    ui_print "- Setting up magiskboot..."
     if [ -f /system/bin/magiskboot ] && [ -x /system/bin/magiskboot ]; then
-        MAGISKBOOT_BIN="/system/bin/magiskboot"
         export PATH="/system/bin:$PATH"
         return
-    fi
-
-    if [ -f "$EX_DIR/magiskboot" ]; then
+    elif [ -f /sbin/magiskboot ] && [ -x /sbin/magiskboot ]; then
+        export PATH="/sbin:$PATH"
+        return
+    elif [ -f "$EX_DIR/magiskboot" ]; then
         cp -f "$EX_DIR/magiskboot" /sbin/magiskboot 2>/dev/null
         chmod 0755 /sbin/magiskboot 2>/dev/null
-        if [ -f /sbin/magiskboot ] && [ -x /sbin/magiskboot ]; then
-            MAGISKBOOT_BIN="/sbin/magiskboot"
-            export PATH="/sbin:$PATH"
-        else
-            cp -f "$EX_DIR/magiskboot" "$TMP_DIR/magiskboot"
-            chmod 0755 "$TMP_DIR/magiskboot"
-            export PATH="$TMP_DIR:$EX_DIR:$PATH"
-            MAGISKBOOT_BIN="$TMP_DIR/magiskboot"
-        fi
+        export PATH="/sbin:$EX_DIR:$PATH"
     else
-        abort "magiskboot not found in ZIP!"
+        abort "magiskboot not found in recovery!"
     fi
 }
 
@@ -161,10 +151,6 @@ CheckRequirements() {
 do_install() {
     ui_print "- Patching and flashing $PART with $TARGET..."
 
-    mkdir -p /tmp 2>/dev/null
-    export HOME="/tmp"
-    export TMPDIR="/tmp"
-
     HELP_OUT=$("$KSUD_BIN" boot-patch --help 2>&1)
     KMI_ARG=""
     echo "$HELP_OUT" | grep -q -- "--kmi" && KMI_ARG="--kmi $SUPPORTED_KERNEL"
@@ -195,50 +181,13 @@ do_install() {
     ui_print "- $TARGET ramdisk patch complete!"
 }
 
-stage_susfs_and_fix_zygisk() {
-    mount /data 2>/dev/null
-    [ -d "/data/adb" ] || return 0
-
-    # 1. Remove any old broken scripts
-    rm -f /data/adb/service.d/99_aegis_apk_install.sh \
-          /data/adb/aegis_manager.apk \
-          /data/adb/post-fs-data.d/00_sukisu_stealth.sh \
-          /data/adb/service.d/00_sukisu_stealth.sh
-
-    # 2. Sync ksud binary to /data/adb/ksud so ramdisk & /data/adb/ksud always match
-    cp -f "$KSUD_BIN" /data/adb/ksud
-    chmod 0755 /data/adb/ksud
-    chcon u:object_r:system_file:s0 /data/adb/ksud 2>/dev/null
-
-    # 3. Pre-create /data/adb/zygisksu so zn-daemon64 NEVER fails with fopen .magic errno 2
-    mkdir -p /data/adb/zygisksu
-    chmod 0700 /data/adb/zygisksu
-    rm -f /data/adb/modules/zygisksu/disable /data/adb/modules/zygisksu/remove 2>/dev/null
-
-    # 4. Stage SuSFS4KSU module into /data/adb/modules/susfs4ksu if bundled
-    if [ -f "$EX_DIR/susfs4ksu.zip" ]; then
-        ui_print "- Installing SuSFS4KSU module..."
-        mkdir -p /data/adb/modules/susfs4ksu
-        unzip -o "$EX_DIR/susfs4ksu.zip" -d /data/adb/modules/susfs4ksu >/dev/null 2>&1
-        chmod -R 0755 /data/adb/modules/susfs4ksu/bin 2>/dev/null
-        rm -f /data/adb/modules/susfs4ksu/disable /data/adb/modules/susfs4ksu/remove
-    fi
-
-    # 5. Copy Spoofed Manager APK to /sdcard/Download for convenience (no boot script)
-    if [ -f "$EX_DIR/manager.apk" ] && [ -d "/data/media/0/Download" ]; then
-        cp -f "$EX_DIR/manager.apk" "/data/media/0/Download/${TARGET}_Spoofed_Manager.apk"
-        chmod 0664 "/data/media/0/Download/${TARGET}_Spoofed_Manager.apk"
-        ui_print "- Manager APK saved to /sdcard/Download/${TARGET}_Spoofed_Manager.apk"
-    fi
-}
-
 Main() {
     get_target
     Unzip_Installer_Package
 
     ui_print "==========================================="
     ui_print " ⚡ AEGIS-ROOT : UNIVERSAL AUTO-PATCHER ⚡ "
-    ui_print "    Engine    : $TARGET + SuSFS            "
+    ui_print "    Engine    : $TARGET                    "
     ui_print "    Maintainer: @Raju_D_yeager             "
     ui_print "    Version   : $MOD_DATE                  "
     ui_print "==========================================="
@@ -248,7 +197,6 @@ Main() {
     setup_magiskboot
     CheckRequirements
     do_install
-    stage_susfs_and_fix_zygisk
 
     ui_print "==========================================="
     ui_print " ✅ Flashed Successfully! By @Raju_D_yeager"
