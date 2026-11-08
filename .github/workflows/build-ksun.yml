@@ -54,7 +54,7 @@ jobs:
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
           echo "should_build=true" >> $GITHUB_OUTPUT
 
-      - name: Fetch KernelSU-Next LKM, Spoofed APK & magiskboot
+      - name: Fetch KernelSU-Next LKM, SuSFS Module & magiskboot
         if: steps.check.outputs.should_build == 'true'
         run: |
           KSUN_JSON=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/KernelSU-Next/KernelSU-Next/releases/latest)
@@ -72,6 +72,9 @@ jobs:
             [ "$KO_URL" != "null" ] && [ -n "$KO_URL" ] && curl -fL "$KO_URL" -o "${KMI}_kernelsu.ko"
           done
 
+          SUSFS_URL=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/sidex15/susfs4ksu-module/releases/latest | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n 1)
+          [ -n "$SUSFS_URL" ] && [ "$SUSFS_URL" != "null" ] && curl -fL "$SUSFS_URL" -o susfs4ksu.zip || true
+
           MAGISK_URL=$(curl -sfL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/topjohnwu/Magisk/releases/latest | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
           curl -fL "$MAGISK_URL" -o magisk.apk
           unzip -p magisk.apk lib/arm64-v8a/libmagiskboot.so > magiskboot
@@ -80,8 +83,8 @@ jobs:
       - name: Package KernelSU-Next ZIP
         if: steps.check.outputs.should_build == 'true'
         run: |
-          ZIP_NAME="KernelSU_Next_${{ env.CORE_VER }}_Universal_Installer.zip"
-          zip -r9 "$ZIP_NAME" META-INF ksud magiskboot manager.apk *.ko
+          ZIP_NAME="KernelSU_Next_${{ env.CORE_VER }}_SuSFS_Universal_Installer.zip"
+          zip -r9 "$ZIP_NAME" META-INF ksud magiskboot manager.apk *.ko susfs4ksu.zip 2>/dev/null || zip -r9 "$ZIP_NAME" META-INF ksud magiskboot manager.apk *.ko
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Save New KSUN Version State
@@ -98,20 +101,21 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "${{ env.RELEASE_TAG }}"
-          name: "⚡ KernelSU-Next ${{ env.CORE_VER }} Universal Installer"
+          name: "⚡ KernelSU-Next ${{ env.CORE_VER }} + SuSFS Universal Installer"
           files: ${{ env.ZIP_NAME }}
           generate_release_notes: true
 
       - name: Upload to Telegram Channel (@Evil_twin_peridot)
         if: steps.check.outputs.should_build == 'true'
         run: |
-          CAPTION="⚡ <b>AEGIS-ROOT : KernelSU-Next Universal Installer</b>
+          CAPTION="⚡ <b>AEGIS-ROOT : KernelSU-Next + SuSFS Universal Installer</b>
           👤 <b>Maintainer:</b> @Raju_D_yeager
 
-          🔹 <b>KernelSU-Next:</b> <code>${{ env.CORE_VER }}</code> (Spoofed APK Bundled)
+          🔹 <b>KernelSU-Next:</b> <code>${{ env.CORE_VER }}</code>
+          🔹 <b>Bundled Addons:</b> <code>SuSFS4KSU Module + Spoofed APK (in /Download)</code>
           🔹 <b>Universal KMIs:</b> <code>A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18</code>
 
-          📦 <i>Clean Universal GKI 2.0+ Root Flasher (Auto-patches init_boot/boot & auto-installs Spoofed Manager APK)</i>"
+          📦 <i>Patches init_boot/boot, syncs ksud + Zygisk Next dir, and stages SuSFS4KSU module</i>"
 
           RESP=$(curl -s \
             --form-string "chat_id=${TG_CHAT_ID}" \
