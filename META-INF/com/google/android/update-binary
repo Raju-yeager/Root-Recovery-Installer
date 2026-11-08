@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # ******************************************************
-# Description: AegisRoot Pure Universal SukiSU / KSUN Installer
+# Description: AegisRoot Universal SukiSU / KSUN + SuSFS Installer
 # Base Script Credit: OrangeFox Team, @invisibazinga, @Khargosxh18
 # Modified & Maintained By: @Raju_D_yeager
 # ******************************************************
@@ -71,10 +71,6 @@ setup_magiskboot() {
     elif [ -f /sbin/magiskboot ] && [ -x /sbin/magiskboot ]; then
         export PATH="/sbin:$PATH"
         return
-    elif [ -f "$EX_DIR/magiskboot" ]; then
-        cp -f "$EX_DIR/magiskboot" /sbin/magiskboot 2>/dev/null
-        chmod 0755 /sbin/magiskboot 2>/dev/null
-        export PATH="/sbin:$EX_DIR:$PATH"
     else
         abort "magiskboot not found in recovery!"
     fi
@@ -181,13 +177,38 @@ do_install() {
     ui_print "- $TARGET ramdisk patch complete!"
 }
 
+stage_susfs_only() {
+    [ -f "$EX_DIR/susfs4ksu.zip" ] || return 0
+    mount /data 2>/dev/null
+    [ -d "/data/adb" ] || return 0
+
+    ui_print "- Staging SuSFS4KSU module..."
+    # Stage onlysusfs4ksu.zip to /data/adb/ and let ksud's native module installer install it after boot!
+    # This avoids creating ANY directories in /data/adb during recovery (0% chance of mkdir/error 2 or Zygisk issues).
+    cp -f "$EX_DIR/susfs4ksu.zip" /data/adb/susfs4ksu.zip
+    chmod 0644 /data/adb/susfs4ksu.zip
+
+    mkdir -p /data/adb/service.d
+    chmod 0755 /data/adb/service.d
+    cat << 'SCRIPT' > /data/adb/service.d/90_install_susfs.sh
+#!/system/bin/sh
+if [ -f "/data/adb/susfs4ksu.zip" ]; then
+  /data/adb/ksud module install /data/adb/susfs4ksu.zip >/dev/null 2>&1
+  rm -f /data/adb/susfs4ksu.zip "$0"
+fi
+exit 0
+SCRIPT
+    chmod 0755 /data/adb/service.d/90_install_susfs.sh
+    restorecon -R /data/adb/service.d /data/adb/susfs4ksu.zip 2>/dev/null
+}
+
 Main() {
     get_target
     Unzip_Installer_Package
 
     ui_print "==========================================="
     ui_print " ⚡ AEGIS-ROOT : UNIVERSAL AUTO-PATCHER ⚡ "
-    ui_print "    Engine    : $TARGET                    "
+    ui_print "    Engine    : $TARGET + SuSFS            "
     ui_print "    Maintainer: @Raju_D_yeager             "
     ui_print "    Version   : $MOD_DATE                  "
     ui_print "==========================================="
@@ -197,6 +218,7 @@ Main() {
     setup_magiskboot
     CheckRequirements
     do_install
+    stage_susfs_only
 
     ui_print "==========================================="
     ui_print " ✅ Flashed Successfully! By @Raju_D_yeager"
