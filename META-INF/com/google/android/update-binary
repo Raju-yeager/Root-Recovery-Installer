@@ -1,11 +1,10 @@
 #!/system/bin/sh
 # ******************************************************
-# Description: AegisRoot Universal SukiSU / KSUN + SuSFS Installer
-# Base Script Credit: OrangeFox Team, @invisibazinga, @Khargosxh18
-# Modified & Maintained By: @Raju_D_yeager
+# Description: AegisRoot Android 14 (6.1) Root Installer
+# Maintainer : @Raju_D_yeager
 # ******************************************************
 
-MOD_DATE="20261108"
+MOD_DATE="20261110"
 TARGET="SukiSU-Ultra"
 SCREEN=/proc/self/fd/$2
 ZIPFILE="$3"
@@ -13,7 +12,7 @@ ZIPFILE="$3"
 FNAME=""
 PART=""
 KSUD_BIN=""
-SUPPORTED_KERNEL=""
+SUPPORTED_KERNEL="android14-6.1"
 
 BOOTMODE=false
 ps | grep zygote | grep -v grep >/dev/null && BOOTMODE=true
@@ -21,7 +20,7 @@ $BOOTMODE || ps -A 2>/dev/null | grep zygote | grep -v grep >/dev/null && BOOTMO
 
 $BOOTMODE && TMP_DIR=/dev/tmp || TMP_DIR=/tmp
 mkdir -p "$TMP_DIR"
-EX_DIR="$TMP_DIR/twrp_ksu_installer"
+EX_DIR="$TMP_DIR/ksu_installer"
 
 ui_print() {
     if [ "$BOOTMODE" = "true" ]; then
@@ -78,7 +77,7 @@ setup_magiskboot() {
 
 find_ksud() {
     local p
-    for p in "$EX_DIR/ksud" /sbin/ksud /tmp/ksud /system/bin/ksud; do
+    for p in "$EX_DIR/ksud" /sbin/ksud /tmp/ksud; do
         if [ -f "$p" ]; then
             chmod 0755 "$p" 2>/dev/null
             cp -f "$p" /sbin/ksud 2>/dev/null
@@ -90,45 +89,19 @@ find_ksud() {
     return 1
 }
 
-find_kernel_kmi() {
-    local k_kmi
-    local kernel_ver
-    local kernel_ver_num
-
-    if [ -n "$KSUD_BIN" ]; then
-        k_kmi=$("$KSUD_BIN" boot-info current-kmi 2>/dev/null)
-        if [ "$?" = "0" ] && [ -n "$k_kmi" ] && [ "$k_kmi" != "unknown" ]; then
-            echo "$k_kmi"
-            return
-        fi
-    fi
-
-    kernel_ver=$(uname -r 2>/dev/null)
-    kernel_ver_num=$(echo "$kernel_ver" | cut -d. -f1-2)
-
-    case "$kernel_ver_num" in
-        5.*|4.*|3.*) echo "unsupported_legacy" ; return ;;
-        6.1)  echo "android14-6.1"  ; return ;;
-        6.6)  echo "android15-6.6"  ; return ;;
-        6.12) echo "android16-6.12" ; return ;;
-        6.18) echo "android17-6.18" ; return ;;
-    esac
-    echo "unknown"
-}
-
 CheckRequirements() {
     KSUD_BIN=$(find_ksud)
     [ -n "$KSUD_BIN" ] && [ -f "$KSUD_BIN" ] || abort "ksud binary not found!"
 
     local KERNEL_VERSION=$(uname -r 2>/dev/null)
-    SUPPORTED_KERNEL=$(find_kernel_kmi)
+    local KERNEL_VER_NUM=$(echo "$KERNEL_VERSION" | cut -d. -f1-2)
 
-    if [ "$SUPPORTED_KERNEL" = "unsupported_legacy" ]; then
-        abort "Kernel $KERNEL_VERSION is not supported (requires Kernel 6.1+)."
+    if [ "$KERNEL_VER_NUM" != "6.1" ]; then
+        abort "Kernel $KERNEL_VERSION is not supported! Requires Linux 6.1 (android14-6.1)."
     fi
 
     FNAME=$(ls "$EX_DIR"/*"${SUPPORTED_KERNEL}"*.ko 2>/dev/null | head -n 1)
-    [ -n "$FNAME" ] && [ -e "$FNAME" ] || abort "Missing LKM for $KERNEL_VERSION ($SUPPORTED_KERNEL)"
+    [ -n "$FNAME" ] && [ -e "$FNAME" ] || abort "Missing LKM for $SUPPORTED_KERNEL"
 
     ui_print "- Kernel OK : $KERNEL_VERSION"
     ui_print "- Target KMI: $SUPPORTED_KERNEL"
@@ -147,13 +120,16 @@ CheckRequirements() {
 do_install() {
     ui_print "- Patching and flashing $PART with $TARGET..."
 
+    export HOME="/tmp"
+    export TMPDIR="/tmp"
+
     HELP_OUT=$("$KSUD_BIN" boot-patch --help 2>&1)
     KMI_ARG=""
     echo "$HELP_OUT" | grep -q -- "--kmi" && KMI_ARG="--kmi $SUPPORTED_KERNEL"
 
     "$KSUD_BIN" boot-patch --module "$FNAME" $KMI_ARG --flash >&2
     if [ $? -ne 0 ]; then
-        ui_print "- Native --flash fallback to block dd..."
+        ui_print "- Using direct block device flash..."
         SLOT=$(getprop ro.boot.slot_suffix)
         [ -z "$SLOT" ] && SLOT=$(grep -o 'androidboot.slot_suffix=_[ab]' /proc/cmdline | cut -d= -f2)
 
@@ -177,40 +153,15 @@ do_install() {
     ui_print "- $TARGET ramdisk patch complete!"
 }
 
-stage_susfs_only() {
-    [ -f "$EX_DIR/susfs4ksu.zip" ] || return 0
-    mount /data 2>/dev/null
-    [ -d "/data/adb" ] || return 0
-
-    ui_print "- Staging SuSFS4KSU module..."
-    # Stage onlysusfs4ksu.zip to /data/adb/ and let ksud's native module installer install it after boot!
-    # This avoids creating ANY directories in /data/adb during recovery (0% chance of mkdir/error 2 or Zygisk issues).
-    cp -f "$EX_DIR/susfs4ksu.zip" /data/adb/susfs4ksu.zip
-    chmod 0644 /data/adb/susfs4ksu.zip
-
-    mkdir -p /data/adb/service.d
-    chmod 0755 /data/adb/service.d
-    cat << 'SCRIPT' > /data/adb/service.d/90_install_susfs.sh
-#!/system/bin/sh
-if [ -f "/data/adb/susfs4ksu.zip" ]; then
-  /data/adb/ksud module install /data/adb/susfs4ksu.zip >/dev/null 2>&1
-  rm -f /data/adb/susfs4ksu.zip "$0"
-fi
-exit 0
-SCRIPT
-    chmod 0755 /data/adb/service.d/90_install_susfs.sh
-    restorecon -R /data/adb/service.d /data/adb/susfs4ksu.zip 2>/dev/null
-}
-
 Main() {
     get_target
     Unzip_Installer_Package
 
     ui_print "==========================================="
-    ui_print " ⚡ AEGIS-ROOT : UNIVERSAL AUTO-PATCHER ⚡ "
-    ui_print "    Engine    : $TARGET + SuSFS            "
+    ui_print " ⚡ AEGIS-ROOT : A14-6.1 AUTO-PATCHER ⚡   "
+    ui_print "    Engine    : $TARGET                    "
     ui_print "    Maintainer: @Raju_D_yeager             "
-    ui_print "    Version   : $MOD_DATE                  "
+    ui_print "    Build Date: $MOD_DATE                  "
     ui_print "==========================================="
 
     [ "$BOOTMODE" = "true" ] && abort "Flash from custom recovery only!"
@@ -218,7 +169,6 @@ Main() {
     setup_magiskboot
     CheckRequirements
     do_install
-    stage_susfs_only
 
     ui_print "==========================================="
     ui_print " ✅ Flashed Successfully! By @Raju_D_yeager"

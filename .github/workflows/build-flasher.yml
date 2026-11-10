@@ -26,7 +26,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check if SukiSU-Ultra Version Changed
+      - name: Check SukiSU-Ultra Stable Version
         id: check
         run: |
           SUKI_JSON=$(gh api repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest)
@@ -54,59 +54,60 @@ jobs:
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
           echo "should_build=true" >> $GITHUB_OUTPUT
 
-      - name: Fetch SukiSU-Ultra LKM, ksud & SuSFS (NO APK, NO magiskboot)
+      - name: Fetch SukiSU-Ultra android14-6.1 LKM & ksud
         if: steps.check.outputs.should_build == 'true'
         run: |
-          # Use gh release download + curl retry to prevent GitHub CDN 504 Gateway Timeouts
-          gh release download "${{ env.SUKI_TAG }}" -R SukiSU-Ultra/SukiSU-Ultra -p "ksud-aarch64-linux-android" -O ksud --clobber
+          retry_dl() {
+            for i in 1 2 3 4 5; do
+              "$@" && return 0
+              echo "Attempt $i failed, retrying in 4s..."
+              sleep 4
+            done
+            return 1
+          }
+
+          retry_dl gh release download "${{ env.SUKI_TAG }}" -R SukiSU-Ultra/SukiSU-Ultra -p "ksud-aarch64-linux-android" -O ksud --clobber
           chmod +x ksud
 
-          for KMI in android14-6.1 android15-6.6 android16-6.12 android17-6.18; do
-            gh release download "${{ env.SUKI_TAG }}" -R SukiSU-Ultra/SukiSU-Ultra -p "*${KMI}_kernelsu.ko" --clobber || true
-            FOUND_KO=$(ls *${KMI}_kernelsu.ko 2>/dev/null | head -n 1 || true)
-            if [ -n "$FOUND_KO" ] && [ "$FOUND_KO" != "${KMI}_kernelsu.ko" ]; then
-              mv -f "$FOUND_KO" "${KMI}_kernelsu.ko"
-            fi
-          done
+          retry_dl gh release download "${{ env.SUKI_TAG }}" -R SukiSU-Ultra/SukiSU-Ultra -p "*android14-6.1_kernelsu.ko" --clobber
+          FOUND_KO=$(ls *android14-6.1_kernelsu.ko | head -n 1)
+          [ "$FOUND_KO" != "android14-6.1_kernelsu.ko" ] && mv -f "$FOUND_KO" android14-6.1_kernelsu.ko || true
 
-          gh release download -R sidex15/susfs4ksu-module -p "*.zip" -O susfs4ksu.zip --clobber || true
-
-      - name: Package SukiSU-Ultra + SuSFS ZIP (No APK)
+      - name: Package SukiSU-Ultra A14-6.1 ZIP
         if: steps.check.outputs.should_build == 'true'
         run: |
-          ZIP_NAME="SukiSU_Ultra_${{ env.CORE_VER }}_SuSFS_A14+_Installer.zip"
-          zip -r9 "$ZIP_NAME" META-INF ksud *.ko susfs4ksu.zip 2>/dev/null || zip -r9 "$ZIP_NAME" META-INF ksud *.ko
+          ZIP_NAME="SukiSU_Ultra_${{ env.CORE_VER }}_A14-6.1_Installer.zip"
+          zip -r9 "$ZIP_NAME" META-INF ksud android14-6.1_kernelsu.ko
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
-      - name: Save New SukiSU Version State
+      - name: Save SukiSU Version State
         if: steps.check.outputs.should_build == 'true'
         run: |
           echo "${{ env.CORE_VER }}" > .suki_version
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .suki_version
-          git diff --staged --quiet || (git commit -m "chore(release): record SukiSU-Ultra ${{ env.CORE_VER }}" && git push origin main)
+          git diff --staged --quiet || (git commit -m "chore(release): SukiSU-Ultra ${{ env.CORE_VER }}" && git push origin main)
 
       - name: Publish GitHub Release
         if: steps.check.outputs.should_build == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "${{ env.RELEASE_TAG }}"
-          name: "⚡ SukiSU-Ultra ${{ env.CORE_VER }} + SuSFS Installer"
+          name: "⚡ SukiSU-Ultra ${{ env.CORE_VER }} (Android 14 - 6.1) Installer"
           files: ${{ env.ZIP_NAME }}
           generate_release_notes: true
 
       - name: Upload to Telegram Channel (@Evil_twin_peridot)
         if: steps.check.outputs.should_build == 'true'
         run: |
-          CAPTION="⚡ <b>AEGIS-ROOT : SukiSU-Ultra + SuSFS Installer</b>
+          CAPTION="⚡ <b>AEGIS-ROOT : SukiSU-Ultra Installer</b>
           👤 <b>Maintainer:</b> @Raju_D_yeager
 
-          🔹 <b>SukiSU-Ultra:</b> <code>${{ env.CORE_VER }}</code>
-          🔹 <b>Bundled Module:</b> <code>SuSFS4KSU (Native ksud install)</code>
-          🔹 <b>Universal KMIs:</b> <code>A14-6.1 | A15-6.6 | A16-6.12 | A17-6.18</code>
+          🔹 <b>Version:</b> <code>${{ env.CORE_VER }}</code>
+          🔹 <b>Target KMI:</b> <code>android14-6.1</code>
 
-          📦 <i>Lean Universal GKI 2.0+ Root + SuSFS Flasher (No APK bloat)</i>"
+          📦 <i>Pure ramdisk root installer for Linux 6.1 devices</i>"
 
           RESP=$(curl -s --retry 3 \
             --form-string "chat_id=${TG_CHAT_ID}" \
