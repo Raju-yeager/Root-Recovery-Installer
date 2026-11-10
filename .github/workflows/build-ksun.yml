@@ -39,6 +39,11 @@ jobs:
             exit 0
           fi
 
+          APK_URL=$(echo "$KSUN_JSON" | jq -r '.assets[] | select((.name | ascii_downcase | contains("spoof")) and (.name | endswith(".apk"))) | .browser_download_url' | head -n 1)
+          if [ -z "$APK_URL" ] || [ "$APK_URL" = "null" ]; then
+            APK_URL=$(echo "$KSUN_JSON" | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
+          fi
+
           LAST_VER=""
           [ -f .ksun_version ] && LAST_VER=$(cat .ksun_version | tr -d '[:space:]')
           RELEASE_TAG="ksun-${CORE_VER}"
@@ -52,6 +57,7 @@ jobs:
           echo "KSUN_TAG=$KSUN_TAG" >> $GITHUB_ENV
           echo "CORE_VER=$CORE_VER" >> $GITHUB_ENV
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+          echo "APK_URL=$APK_URL" >> $GITHUB_ENV
           echo "should_build=true" >> $GITHUB_OUTPUT
 
       - name: Fetch KernelSU-Next android14-6.1 LKM & ksud
@@ -60,7 +66,6 @@ jobs:
           retry_dl() {
             for i in 1 2 3 4 5; do
               "$@" && return 0
-              echo "Attempt $i failed, retrying in 4s..."
               sleep 4
             done
             return 1
@@ -87,27 +92,42 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .ksun_version
-          git diff --staged --quiet || (git commit -m "chore(release): KernelSU-Next ${{ env.CORE_VER }}" && git push origin main)
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(release): KernelSU-Next ${{ env.CORE_VER }}"
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin main && git push origin main && break
+              sleep 3
+            done
+          fi
 
       - name: Publish GitHub Release
         if: steps.check.outputs.should_build == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "${{ env.RELEASE_TAG }}"
-          name: "⚡ KernelSU-Next ${{ env.CORE_VER }} (Android 14 - 6.1) Installer"
+          name: "⚡ KernelSU-Next ${{ env.CORE_VER }} (Android 14 - 6.1) Recovery Installer"
           files: ${{ env.ZIP_NAME }}
-          generate_release_notes: true
+          body: |
+            ### ⚡ KernelSU-Next ${{ env.CORE_VER }} Recovery Root Installer
+            - **Maintainer:** [@Raju_D_yeager](https://t.me/Evil_twin_peridot)
+            - **Credit:** `@Khargosxh18`
+            - **Target KMI:** `android14-6.1` (Linux 6.1)
+            - **Working ROMs:** All AOSP Custom ROMs, HyperOS, MIUI & OEM Ports (Kernel 6.1)
+            - **Supported APK:** Works on **Spoofed Manager Build** ([Download Matching Spoofed APK](${{ env.APK_URL }})) & Standard Manager
+            - **Flash Guide:** `Reboot to Recovery ➔ Flash Installer ZIP ➔ Reboot to System & Install Spoofed Manager APK`
 
       - name: Upload to Telegram Channel (@Evil_twin_peridot)
         if: steps.check.outputs.should_build == 'true'
         run: |
-          CAPTION="⚡ <b>AEGIS-ROOT : KernelSU-Next Installer</b>
+          CAPTION="⚡ <b>AEGIS-ROOT : KernelSU-Next Recovery Installer</b>
           👤 <b>Maintainer:</b> @Raju_D_yeager
+          🎖 <b>Credit:</b> @Khargosxh18
 
-          🔹 <b>Version:</b> <code>${{ env.CORE_VER }}</code>
-          🔹 <b>Target KMI:</b> <code>android14-6.1</code>
+          🔹 <b>Version:</b> <code>${{ env.CORE_VER }}</code> (<code>android14-6.1</code>)
+          🔹 <b>Working ROMs:</b> All AOSP, HyperOS, MIUI & Ports (Kernel 6.1)
+          🔹 <b>Supported APK:</b> <a href=\"${{ env.APK_URL }}\">Spoofed Manager Build (Download)</a>
 
-          📦 <i>Pure ramdisk root installer for Linux 6.1 devices</i>"
+          🛠 <b>Flash:</b> <code>Reboot Recovery ➔ Flash ZIP ➔ Reboot & Install Spoofed APK</code>"
 
           RESP=$(curl -s --retry 3 \
             --form-string "chat_id=${TG_CHAT_ID}" \
